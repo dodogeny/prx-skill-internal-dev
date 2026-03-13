@@ -1,6 +1,6 @@
 # 4C Internal Dev Skill — Claude Code Plugin `v1.2.0`
 
-A [Claude Code](https://claude.ai/code) plugin that gives Claude a structured, end-to-end developer workflow for iNSight V1 Jira tickets. Instead of manually reading a ticket, searching for files, and figuring out where to start, you invoke one command and Claude walks through the full cycle — from ticket ingestion to a proposed fix, archived report, and email delivery.
+A [Claude Code](https://claude.ai/code) plugin that gives Claude a structured, end-to-end developer workflow for V1 Jira tickets. Instead of manually reading a ticket, searching for files, and figuring out where to start, you invoke one command and Claude walks through the full cycle — from ticket ingestion to a proposed fix, archived report, and email delivery.
 
 ---
 
@@ -45,7 +45,7 @@ The feature branch is named: `Feature/IV-XXXX_Ticket_Summary_In_Title_Case` and 
 
 ### Step 4 — Locate Affected Code
 
-Claude searches the iNSight codebase using a **grep-first, read-second** approach — it never reads an entire file speculatively. The flow is:
+Claude searches the V1 codebase using a **grep-first, read-second** approach — it never reads an entire file speculatively. The flow is:
 
 1. `Grep` to find the relevant class, method name, or keyword → get the exact file path and line number
 2. `Read` only the relevant line range (the method ± surrounding context)
@@ -63,7 +63,7 @@ A **confidence gate** runs after the file map: if Claude cannot locate the relev
 
 Claude produces complete, numbered reproduction instructions that any developer on the team can follow without prior knowledge of the issue:
 
-- **Prerequisites** — which iNSight modules must be running, which user role is needed, what test data must exist, any environment-specific notes (Oracle vs PostgreSQL, specific config flags)
+- **Prerequisites** — which V1 modules must be running, which user role is needed, what test data must exist, any environment-specific notes (Oracle vs PostgreSQL, specific config flags)
 - **Reproduction steps** — numbered step-by-step actions from login through to the symptom
 - **Expected result** — what the system should do when working correctly
 - **Actual result** — the exact symptom the reporter observes
@@ -78,7 +78,7 @@ Claude reads the identified files (using targeted line ranges from Step 4) and p
 
 - **Root cause analysis** — a precise explanation of *why* the bug occurs or *why* the feature is missing, with specific `ClassName.java:line` references. Builds on any prior investigation from Step 2 rather than re-deriving known facts.
 - **Code changes** — only the code that needs to change, shown as clear before/after blocks. Each change is explained individually.
-- **DB migration scripts** — if the fix requires schema changes, both an Oracle (`.sql`) and a PostgreSQL (`.pg`) script are provided. iNSight supports both engines and SQL syntax is not assumed to be compatible across them.
+- **DB migration scripts** — if the fix requires schema changes, both an Oracle (`.sql`) and a PostgreSQL (`.pg`) script are provided. V1 supports both engines and SQL syntax is not assumed to be compatible across them.
 
 ---
 
@@ -136,7 +136,7 @@ claude plugin install atlassian
 
 1. Log in to [https://id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
 2. Click **Create API token**
-3. Give it a name (e.g. `Claude Code - iNSight`) and click **Create**
+3. Give it a name (e.g. `Claude Code - V1`) and click **Create**
 4. Copy the token — it will not be shown again
 
 #### 3. Configure the MCP server
@@ -331,9 +331,9 @@ claude plugin update 4c-internal@4cgroup
 
 ---
 
-## Project Context (iNSight V1)
+## Project Context (V1)
 
-The skill is purpose-built for the iNSight V1 codebase:
+The skill is purpose-built for the V1 codebase:
 
 | Area | Path |
 |------|------|

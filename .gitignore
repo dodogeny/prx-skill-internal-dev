@@ -1,0 +1,22 @@
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Node (in case package-lock or node_modules appear)
+node_modules/
+package-lock.json
+npm-debug.log*
+
+# Temp / OS
+Thumbs.db
+*.tmp
+*.log

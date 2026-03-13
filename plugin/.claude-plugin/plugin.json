@@ -1,0 +1,9 @@
+{
+  "name": "4c-internal",
+  "description": "Internal 4C Group developer toolkit for iNSight V1 development workflow",
+  "version": "1.0.0",
+  "author": {
+    "name": "4C Group",
+    "email": "dev@4cgroup.co.za"
+  }
+}

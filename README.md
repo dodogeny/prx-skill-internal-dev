@@ -6,7 +6,7 @@ A [Claude Code](https://claude.ai/code) plugin that gives Claude a structured, e
 
 ## What It Does
 
-When you hand Claude a Jira ticket key (`IV-XXXX`), the skill executes **9 steps automatically**, presenting output at each step as it completes.
+When you hand Claude a Jira ticket key (`IV-XXXX`), the skill executes **10 steps automatically**, presenting output at each step as it completes.
 
 ---
 
@@ -22,7 +22,14 @@ Claude displays a structured ticket summary including the full description text 
 
 Claude analyses everything gathered in Step 1 and produces:
 
-- **Attachment review** — Any qualifying attachments (images, screenshots, log files, XML/config files, draw.io diagrams) under 2MB are downloaded and analysed. Screenshots are described visually; log files are scanned for stack traces and errors; config files are checked for relevant values. Binary files and large archives are skipped automatically.
+- **Attachment review & diagnostic artefact analysis** — All qualifying attachments up to 10 MB are downloaded and analysed. Binary files, archives, and files over 10 MB are skipped automatically. Each attachment is identified by filename, type, and a one-line finding before detailed analysis:
+  - *Screenshots / images* — UI state, error banners, field values, and any visible error codes are described
+  - *Log files* — scanned for stack traces, exception chains, and error patterns; root cause frame extracted
+  - *Thread dumps* — blocked/waiting threads identified, deadlock chains traced, contention point noted with class/method/line
+  - *Memory / heap dumps* — dominant object type identified, exhausted heap space noted, GC patterns extracted
+  - *XML / config files* — relevant config values checked for incorrect or missing entries
+  - *draw.io diagrams* — flow depicted is described
+  All findings are carried forward into the root cause analysis in Step 7.
 - **Problem statement** — A concise description of what is broken or missing, who is affected, what the expected behaviour is, what the current behaviour is, and a clear list of acceptance criteria. Bugs are explicitly labelled as defects; enhancements are explicitly labelled as stories.
 - **Prior investigation summary** — If any comments contain previous investigation work (root cause findings, code traces, attempted fixes, identified files, or partial solutions), Claude extracts and carries these forward as known context. This prevents re-investigating what is already established.
 - **Issue diagram** (optional) — For issues involving a non-obvious data flow or multi-step component interaction, Claude generates a draw.io XML diagram (`.drawio` file) showing the happy path alongside the broken path, annotated with the key method calls and data values involved. Trivial single-file bugs skip this automatically.
@@ -76,32 +83,31 @@ A **confidence gate** applies: High confidence proceeds automatically; Medium no
 
 Claude reads the identified files (using targeted line ranges from Step 4) and produces:
 
-- **Root cause analysis** — a precise explanation of *why* the bug occurs or *why* the feature is missing, with specific `ClassName.java:line` references. Builds on any prior investigation from Step 2 rather than re-deriving known facts.
+- **Root cause analysis** — a precise explanation of *why* the bug occurs or *why* the feature is missing, with specific `ClassName.java:line` references. Builds on any prior investigation from Step 2 (including thread/memory dump findings) rather than re-deriving known facts.
 - **Code changes** — only the code that needs to change, shown as clear before/after blocks. Each change is explained individually.
+- **Apply to branch (interactive)** — after presenting the fix, Claude asks whether to apply the changes directly to the feature branch. Options: `yes` (apply all), `no` (developer applies manually), `partial` (apply selected files only). Changes are applied using targeted edits — no commit is made.
 - **DB migration scripts** — if the fix requires schema changes, both an Oracle (`.sql`) and a PostgreSQL (`.pg`) script are provided. V1 supports both engines and SQL syntax is not assumed to be compatible across them.
 
 ---
 
 ### Step 7 — Impact, Risk & Change Summary
 
-A unified review of the consequences of the fix:
+A unified review of the consequences of the fix across the full application — backed by active codebase searching, not assumptions:
 
 - **Files changed table** — every file touched, the action taken (modified/created/deleted), what changed, and why
-- **Regression risks** — for each change: which existing flows pass through the modified code, whether other callers of modified methods exist, DB data impact, and any race conditions or null pointer risks introduced
+- **Usage reference search** — for every modified method, class, field, or API, Claude greps the full codebase and produces a reference table of all callers and usages found. Public methods, interface implementations, DB columns, and GWT RPC service methods are all checked. A symbol confirmed unused outside its class is explicitly stated as such.
+- **Application-wide impact** — a layer-by-layer impact table covering: GWT Frontend, Backend API, Plugin/Workers, DB/Schema, and Shared Utilities. Each layer states the impact level and detail. Layers with zero references found are confirmed as unaffected.
+- **Regression risks** — for each change: which existing flows are affected, callers that may behave differently after the change, DB data impact, and any race conditions or null pointer risks introduced
 - **Affected clients/environments** — whether the fix is generic (all clients), client-specific (named client due to config differences), or DB-specific (different behaviour on Oracle vs PostgreSQL)
-- **Retest checklist** — screens and flows outside the primary fix that should be smoke-tested before release
-- **Risk level** — Low / Medium / High with a brief rationale
+- **Retest checklist** — screens and flows outside the primary fix that should be smoke-tested, derived from the actual callers found in the usage search
+- **Risk level** — rated objectively based on caller count: Low (0–1 callers), Medium (2–5), High (6+ or DB/shared utility change) — stated prominently with a justification sentence
 - **Suggested commit message** — a ready-to-paste commit message following the project convention: `IV-XXXX_Title_VERSION`
 
 ---
 
-### Step 8 — Archive Report
+### Step 8 — Change Summary
 
-Claude compiles a compact **summary card** (not a full transcript) and archives it:
-
-- Writes `/tmp/IV-XXXX-analysis.md` — a one-page card covering the problem, root cause, fix table, retest items, and commit message
-- Converts to PDF using `pandoc` (preferred) or Python `weasyprint`
-- Copies both files to `~/Documents/DevelopmentTasks/Claude-Analyzed-Tickets/`
+Claude compiles a developer-ready summary covering files touched, what changed and why, and a suggested commit message ready to paste.
 
 ---
 
@@ -112,6 +118,19 @@ Prints a single line with elapsed time, estimated token usage, and estimated cos
 ```
 IV-3672 | ~14m elapsed | ~5,100 in / ~2,040 out tokens | est. cost $0.0462 (Sonnet 4.6)
 ```
+
+---
+
+### Step 10 — PDF Analysis Report
+
+Claude generates a full PDF report of the complete analysis and saves it to a configurable output folder:
+
+- **Output folder** — reads `$CLAUDE_REPORT_DIR` environment variable if set; defaults to `$HOME/Documents/Claude-Analyzed-Tickets/` (works on macOS, Linux, and Windows)
+- **PDF generation** — tries three methods in order, stopping at the first that succeeds:
+  1. **`pandoc`** — best quality, handles tables and code blocks correctly; install via `brew install pandoc` (macOS), `apt install pandoc` (Linux), or the [pandoc installer](https://pandoc.org/installing.html) (Windows)
+  2. **Chrome / Chromium headless** — uses `--print-to-pdf`; works on all platforms if Chrome is installed; no additional setup required
+  3. **HTML fallback** — saves a styled `.html` file and instructs the developer to print to PDF from their browser
+- **Confirmation** — always displays both the output folder and the full file path after saving
 
 ---
 
@@ -170,15 +189,30 @@ The repository must be present at `$HOME/git/insight/` locally. The skill resolv
 > ```
 > Change `git/insight` to the path of your local repository relative to your home directory (e.g. `$HOME/projects/v1` or an absolute path like `/opt/repos/insight`).
 
-### PDF Generation (for Step 8)
-The skill uses `pandoc` (preferred) or Python `weasyprint` to generate the PDF report. At least one must be available:
-```bash
-# Check pandoc
-which pandoc
+### PDF Generation (for Step 10)
 
-# Or install weasyprint via pip
-pip3 install markdown2 weasyprint
+The skill tries three methods in order — no setup is required if Chrome or Chromium is already installed.
+
+**Method 1 — pandoc (best output quality):**
+```bash
+# macOS
+brew install pandoc
+
+# Linux
+apt install pandoc
+
+# Windows — download installer from https://pandoc.org/installing.html
 ```
+
+**Method 2 — Chrome / Chromium headless (no install needed if Chrome is present):**
+
+No setup required. The skill detects Chrome automatically on macOS, Linux, and Windows.
+
+**Method 3 — HTML fallback:**
+
+If neither pandoc nor Chrome is available, the report is saved as a styled `.html` file. Open it in any browser and use **File → Print → Save as PDF**.
+
+> Python `weasyprint` is no longer used — it has unreliable native dependencies on Windows.
 
 ---
 
@@ -293,7 +327,7 @@ https://prevoirsolutions.atlassian.net/browse/IV-3672
 
 > `/dev` is the shorthand — it uses just the skill name. `/prevoir:dev` is the fully qualified form that includes the plugin namespace. Both work; use the fully qualified form if another installed plugin also has a skill named `dev`.
 
-Claude will immediately begin executing all 9 steps in order, presenting output for each step as it completes.
+Claude will immediately begin executing all 10 steps in order, presenting output for each step as it completes.
 
 ### Example output structure
 
@@ -331,11 +365,17 @@ Before/After: ...
 Risk: Low | Files changed: 2 | Retest: 3 items
 Commit: IV3672_Resolving_Cases_Should_Resolve_Alerts_1.26.064
 
-## Step 8 — Archived
-PDF: ~/Documents/DevelopmentTasks/Claude-Analyzed-Tickets/IV-3672-analysis.pdf
+## Step 8 — Change Summary
+Files: 2 modified | Commit message ready to paste
 
-## Step 9
+## Step 9 — Session Stats
 IV-3672 | ~14m elapsed | ~5,100 in / ~2,040 out tokens | est. cost $0.0462 (Sonnet 4.6)
+
+## Step 10 — PDF Report
+📄 Analysis Report Generated
+   Folder : ~/Documents/Claude-Analyzed-Tickets/
+   File   : ~/Documents/Claude-Analyzed-Tickets/IV-3672-analysis.pdf
+   Format : PDF (Chrome headless)
 
 > Ready to code. Branch `Feature/IV-3672_Resolving_Cases_Should_Resolve_Alerts` is checked out.
 > Start with `CaseManager.java:2272`.
@@ -355,7 +395,7 @@ IV-3672 | ~14m elapsed | ~5,100 in / ~2,040 out tokens | est. cost $0.0462 (Sonn
 │   ├── package.json            # Node package metadata
 │   └── skills/
 │       └── dev/
-│           └── SKILL.md        # The skill definition — all 9 steps
+│           └── SKILL.md        # The skill definition — all 10 steps
 ├── .gitignore
 └── README.md
 ```

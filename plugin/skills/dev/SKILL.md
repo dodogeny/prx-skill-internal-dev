@@ -65,6 +65,56 @@ If the ticket type is a **Bug**, explicitly state:
 If the ticket type is a **Story/Enhancement**, explicitly state:
 > "This is an enhancement — the system currently lacks X; we need to add Y."
 
+#### Diagnostic Artefact Analysis
+
+Download and analyse all qualifying attachments from the ticket. Apply these rules:
+
+| Attachment type | Size limit | Action |
+|----------------|------------|--------|
+| Images / screenshots | ≤ 10 MB | Describe visually — UI state, error messages, highlighted fields |
+| Log files (`.log`, `.txt`) | ≤ 10 MB | Scan for stack traces, exceptions, and error patterns |
+| Thread dumps (`.tdump`, `.txt` with thread stacks) | ≤ 10 MB | Full analysis — see below |
+| Memory / heap dumps (`.hprof`, `.heap`) | ≤ 10 MB | Full analysis — see below |
+| XML / config files | ≤ 10 MB | Check for relevant config values, malformed entries |
+| draw.io diagrams (`.drawio`, `.xml`) | ≤ 10 MB | Describe the flow depicted |
+| Binary files, archives (`.zip`, `.jar`, `.war`, `.class`) | any | Skip — state "skipped (binary/archive)" |
+| Any file > 10 MB | — | Skip — state "skipped (exceeds 10 MB limit)" |
+
+For each attachment analysed, state its filename, type, size, and a one-line summary of what was found before the detailed analysis below.
+
+---
+
+**Screenshots / Images:**
+- Describe the UI state visible — screen name, error banners, field values, highlighted rows
+- Note any error codes, HTTP status, or modal messages visible in the screenshot
+
+**Thread Dumps** (`.tdump`, `.txt`, `.log` files containing thread stack traces):
+- Identify threads in `BLOCKED`, `WAITING`, or `TIMED_WAITING` state
+- Look for deadlock indicators (threads waiting on locks held by each other)
+- Extract the top stack frames from the relevant thread — note the class and method at the point of contention
+- Summarise: "Thread `X` is blocked at `ClassName.method():line` waiting for lock held by thread `Y`"
+
+**Memory Dumps / Heap Dumps** (`.hprof`, `.heap`, OOM log excerpts):
+- Identify the object type dominating heap usage
+- Note the `OutOfMemoryError` message and which heap space was exhausted (heap, metaspace, stack)
+- Extract any GC log patterns if present (frequent full GCs, long pause times)
+- Summarise: "Heap exhausted by `N` instances of `ClassName` — likely a retention/leak in `FlowX`"
+
+**Application / Server Logs** (`.log`, stack trace excerpts in description or attachments):
+- Extract the full exception chain (root cause first)
+- Note the first application frame in the stack trace (below any framework frames)
+- Note timestamps and whether the error is intermittent or consistent
+- Summarise: "`NullPointerException` at `ClassName.method():line` — triggered when `condition`"
+
+**XML / Config Files:**
+- Identify the config type (worker config, routing rule, datasource, etc.)
+- Note any values that appear incorrect, missing, or relevant to the reported issue
+
+If no attachments are present, state: "No attachments found — proceeding from description only."
+If attachments are present but none are qualifying types, state: "Attachments present but all skipped (binary/archive or exceeds 10 MB)."
+
+Carry all findings forward into the **Prior Investigation Summary** in Step 3 and the **Root Cause Analysis** in Step 7.
+
 ---
 
 ### Step 3 — Read Comments for Additional Context
@@ -439,29 +489,99 @@ Write a temporary Markdown file at `/tmp/{TICKET_KEY}-analysis.md` containing th
 
 #### 10c. Convert to PDF
 
-Use Python to convert the Markdown file to PDF. Try these methods in order until one succeeds:
+Try each method in order, stopping at the first that succeeds. These methods work reliably on macOS, Linux, and Windows without platform-specific library dependencies.
 
-**Method 1 — `weasyprint` (preferred):**
-```python
-import subprocess
-subprocess.run([
-    "python3", "-c",
-    "import weasyprint, markdown2; "
-    "html = '<style>body{font-family:sans-serif;margin:40px;line-height:1.6}pre{background:#f4f4f4;padding:10px;border-radius:4px}code{background:#f4f4f4;padding:2px 4px}</style>' + markdown2.markdown(open('/tmp/{TICKET_KEY}-analysis.md').read(), extras=['fenced-code-blocks','tables']); "
-    "weasyprint.HTML(string=html).write_pdf('{REPORT_DIR}/{TICKET_KEY}-analysis.pdf')"
-], check=True)
+**Method 1 — `pandoc` (preferred, best cross-platform support):**
+
+Check if pandoc is available:
+```bash
+which pandoc        # macOS / Linux
+where pandoc        # Windows
 ```
 
-**Method 2 — `reportlab` fallback:**
-```python
-from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Preformatted
-from reportlab.lib.styles import getSampleStyleSheet
-# read markdown, write plain-text-formatted PDF
+If available, convert directly from Markdown to PDF:
+```bash
+pandoc /tmp/{TICKET_KEY}-analysis.md \
+  -o "{REPORT_DIR}/{TICKET_KEY}-analysis.pdf" \
+  --pdf-engine=wkhtmltopdf \
+  -V geometry:margin=2cm \
+  -V fontsize=11pt
 ```
 
-**Method 3 — HTML file fallback** (if neither library is available):
-Save an HTML file instead: `{REPORT_DIR}/{TICKET_KEY}-analysis.html` with the same content wrapped in basic HTML+CSS. Inform the developer the HTML was saved instead of a PDF.
+If `wkhtmltopdf` is not available, try the HTML intermediary instead:
+```bash
+pandoc /tmp/{TICKET_KEY}-analysis.md \
+  -o /tmp/{TICKET_KEY}-analysis.html \
+  --standalone --metadata title="{TICKET_KEY} Analysis"
+```
+Then proceed to Method 2 to print the HTML to PDF.
+
+> **Install pandoc:** https://pandoc.org/installing.html — available via `brew install pandoc` (macOS), `apt install pandoc` (Linux), or the Windows installer.
+
+**Method 2 — Chrome / Chromium headless (no install required if Chrome is present):**
+
+Check for a browser:
+```bash
+# macOS
+which google-chrome || which chromium || \
+  ls "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" 2>/dev/null
+
+# Linux
+which google-chrome || which chromium-browser || which chromium
+
+# Windows (PowerShell)
+where chrome
+```
+
+First convert the Markdown to a styled HTML file:
+```python
+python3 -c "
+import markdown2, pathlib
+md = pathlib.Path('/tmp/{TICKET_KEY}-analysis.md').read_text()
+html = '''<!DOCTYPE html><html><head><meta charset=\"utf-8\">
+<style>
+  body{font-family:Segoe UI,Arial,sans-serif;margin:40px;line-height:1.7;color:#222}
+  h1{color:#1a1a2e}h2{color:#16213e;border-bottom:1px solid #ddd;padding-bottom:4px}
+  pre{background:#f4f4f4;padding:12px;border-radius:4px;overflow-x:auto}
+  code{background:#f4f4f4;padding:2px 5px;border-radius:3px}
+  table{border-collapse:collapse;width:100%}
+  th,td{border:1px solid #ccc;padding:8px;text-align:left}
+  th{background:#f0f0f0}
+  blockquote{border-left:4px solid #ccc;margin:0;padding-left:16px;color:#555}
+</style></head><body>''' + markdown2.markdown(md, extras=['fenced-code-blocks','tables','strike']) + '</body></html>'
+pathlib.Path('/tmp/{TICKET_KEY}-analysis.html').write_text(html)
+"
+```
+
+Then print to PDF using Chrome headless:
+```bash
+# macOS
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --headless --no-sandbox --disable-gpu \
+  --print-to-pdf="{REPORT_DIR}/{TICKET_KEY}-analysis.pdf" \
+  "file:///tmp/{TICKET_KEY}-analysis.html"
+
+# Linux
+google-chrome --headless --no-sandbox --disable-gpu \
+  --print-to-pdf="{REPORT_DIR}/{TICKET_KEY}-analysis.pdf" \
+  "file:///tmp/{TICKET_KEY}-analysis.html"
+
+# Windows (PowerShell)
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" `
+  --headless --disable-gpu `
+  --print-to-pdf="{REPORT_DIR}\{TICKET_KEY}-analysis.pdf" `
+  "file:///C:/Users/$env:USERNAME/AppData/Local/Temp/{TICKET_KEY}-analysis.html"
+```
+
+**Method 3 — HTML fallback** (if neither pandoc nor Chrome are available):
+
+Save the styled HTML file produced in Method 2 directly to the report folder:
+```bash
+cp /tmp/{TICKET_KEY}-analysis.html "{REPORT_DIR}/{TICKET_KEY}-analysis.html"
+```
+
+Inform the developer:
+> "PDF generation unavailable (pandoc and Chrome not found). Report saved as HTML instead. Open in any browser and use File → Print → Save as PDF to convert manually."
 
 #### 10d. Archive and Confirm
 

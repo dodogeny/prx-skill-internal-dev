@@ -1,18 +1,18 @@
 {
-  "name": "4cgroup",
+  "name": "prevoir",
   "owner": {
-    "name": "4C Group"
+    "name": "Prevoir"
   },
   "metadata": {
-    "description": "Internal 4C Group developer toolkit for iNSight V1 development workflow",
+    "description": "Internal Prevoir developer toolkit for V1 development workflow",
     "homepage": ""
   },
   "plugins": [
     {
-      "name": "4c-internal",
+      "name": "prevoir",
       "version": "1.0.0",
       "source": "./plugin",
-      "description": "Internal 4C Group developer toolkit for iNSight V1 development workflow"
+      "description": "Internal Prevoir developer toolkit for V1 development workflow"
     }
   ]
 }

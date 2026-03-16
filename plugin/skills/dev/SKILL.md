@@ -1,19 +1,29 @@
 ---
 name: dev
-description: 4C internal developer workflow skill. Use when a developer provides a Jira ticket URL or ticket key (e.g. IV-1234) and wants to start development work. Handles the full workflow from reading the Jira ticket to proposing a code fix — including reading the description, understanding the problem, checking comments, creating a git branch, locating affected code, and proposing a fix with explanation.
+description: Prevoir internal developer workflow skill. Use when a developer provides a Jira ticket URL or ticket key (e.g. IV-1234) and wants to start development work. Handles the full workflow from reading the Jira ticket to proposing a code fix — including reading the description, understanding the problem, checking comments, creating a git branch, locating affected code, and proposing a fix with explanation.
 version: 1.0.0
 ---
 
-# 4C Dev Workflow Skill
+# Prevoir Dev Workflow Skill
 
-Full end-to-end developer onboarding workflow for iNSight V1 Jira tickets. Guides Claude through reading, understanding, branching, locating, and fixing a reported issue or enhancement.
+Full end-to-end developer onboarding workflow for V1 Jira tickets. Guides Claude through reading, understanding, branching, locating, and fixing a reported issue or enhancement.
+
+## Configuration
+
+Before executing any step, resolve the following variable by running `echo $HOME` via Bash:
+
+```
+REPO_DIR = $HOME/git/insight
+```
+
+Use `REPO_DIR` wherever the repository path is referenced throughout this skill.
 
 ## When to Use This Skill
 
 Invoke when the developer provides:
 - A Jira ticket URL: `https://prevoirsolutions.atlassian.net/browse/IV-XXXX`
 - A Jira ticket key: `IV-XXXX`
-- A phrase like `/4c-internal:dev IV-3672` or "start dev on IV-3672" or "pick up IV-3672"
+- A phrase like `/prevoir:dev IV-3672` or "start dev on IV-3672" or "pick up IV-3672"
 
 Do NOT invoke for general code questions, PR reviews, or questions unrelated to starting work on a Jira ticket.
 
@@ -123,7 +133,7 @@ Example: `IV-3672` + "Resolving Cases should Resolve Alerts"
 
 #### 4c. Create the Branch
 
-Run the following commands **in the repository working directory** (`/Users/javed.neemuth/git/insight/`):
+Run the following commands **in the repository working directory** (`{REPO_DIR}/`):
 
 First, check if the base branch exists locally:
 
@@ -150,7 +160,7 @@ Confirm the branch was created and is checked out.
 
 ### Step 5 — Locate Affected Code
 
-Based on the ticket description, comments, and labels, search the codebase at `/Users/javed.neemuth/git/insight/` to identify:
+Based on the ticket description, comments, and labels, search the codebase at `{REPO_DIR}/` to identify:
 
 1. **Primary files likely affected** — use Grep/Glob to locate relevant classes, methods, or config
 2. **Entry point** — where does the flow start? (API endpoint, UI event handler, worker, scheduled job)
@@ -174,7 +184,7 @@ Based on the ticket description, comments, and located code, produce clear step-
 
 #### 6a. Prerequisites
 List everything needed before reproduction can begin:
-- Required iNSight modules / spawners that must be running (e.g. Case Service, Alert Scanner)
+- Required modules / spawners that must be running (e.g. Case Service, Alert Scanner)
 - Specific user roles or permissions needed
 - Test data that must exist (e.g. a case with open alerts, a specific alert type)
 - Environment notes (e.g. Oracle vs Postgres, specific config flags)
@@ -183,7 +193,7 @@ List everything needed before reproduction can begin:
 Number each step. Be explicit — do not assume prior knowledge:
 
 ```
-1. Log in to iNSight as a user with [role] permissions.
+1. Log in as a user with [role] permissions.
 2. Navigate to [Screen] via [Menu path].
 3. [Perform action — e.g. "Select a case with at least 2 open alerts in Alert Central."]
 4. [Perform the triggering action — e.g. "Use the Actions dropdown → Change Status → RESOLVED."]
@@ -310,186 +320,22 @@ IV3672_Resolving_Cases_should_Resolve_Alerts_1.26.064 IV3672 Mustakeem Lee
 
 ---
 
-### Step 10 — Email PDF Report
-
-Once all 9 steps are complete, compile the full analysis into a PDF and email it.
-
-#### 10a. Compile the Report
-
-Write all step outputs to a temporary markdown file at `/tmp/IV-{TICKET_KEY}-analysis.md`.
-
-The markdown file must contain the following structure:
-```
-# Claude Analysis Report — {TICKET_KEY}: {Ticket Summary}
-
-**Jira Ticket:** {TICKET_KEY}
-**Report Generated:** {current datetime in format: DD MMM YYYY HH:mm:ss}
-**Assigned To:** {Assignee}
-**Status:** {Status}
-
----
-
-## Step 1 — Jira Ticket Details
-{full Step 1 output}
-
-## Step 2 — Problem Understanding
-{full Step 2 output}
-
-## Step 3 — Comments & Prior Investigation
-{full Step 3 output}
-
-## Step 4 — Branch Created
-{full Step 4 output}
-
-## Step 5 — Affected Code
-{full Step 5 output}
-
-## Step 6 — Issue Replication
-{full Step 6 output}
-
-## Step 7 — Proposed Fix
-{full Step 7 output}
-
-## Step 8 — Impact Analysis
-{full Step 8 output}
-
-## Step 9 — Change Summary
-{full Step 9 output}
-
----
-*This report was automatically generated by the 4C Dev Skill (Claude Code).*
-```
-
-#### 10b. Convert to PDF
-
-Check if `pandoc` is available, then convert:
-```bash
-which pandoc && pandoc /tmp/IV-{TICKET_KEY}-analysis.md \
-  -o /tmp/IV-{TICKET_KEY}-analysis.pdf \
-  --pdf-engine=xelatex \
-  -V geometry:margin=2cm \
-  -V fontsize=11pt \
-  --highlight-style=tango
-```
-
-If `pandoc` is not available, use Python (`markdown2` + `weasyprint` — install with `--break-system-packages` if needed):
-```bash
-pip3 install markdown2 weasyprint --break-system-packages -q
-python3 -c "
-import markdown2, weasyprint
-with open('/tmp/IV-{TICKET_KEY}-analysis.md') as f:
-    html = markdown2.markdown(f.read(), extras=['fenced-code-blocks','tables'])
-weasyprint.HTML(string=html).write_pdf('/tmp/IV-{TICKET_KEY}-analysis.pdf')
-print('PDF created')
-"
-```
-
-Confirm the PDF was created at `/tmp/IV-{TICKET_KEY}-analysis.pdf`.
-
-#### 10c. Send the Email
-
-Use macOS Mail.app via AppleScript (primary method — works with the Exchange account `javed.neemuth@prevoir.mu`):
-
-```bash
-NOW=$(date "+%d %b %Y %H:%M:%S")
-osascript << APPLESCRIPT
-tell application "Mail"
-    set theMessage to make new outgoing message at beginning of outgoing messages with properties {subject:"{TICKET_KEY}: {Ticket Summary} [ Claude Analysis completed ]", content:"Dear Javed,
-
-Please find the complete analysis performed by Claude for Jira ticket reference {TICKET_KEY}.
-
-View the attached PDF for more information.
-
-Report completed at ${NOW}.
-
-Regards,
-Claude Code — 4C Dev Skill", sender:"javed.neemuth@prevoir.mu", visible:false}
-    tell theMessage
-        make new to recipient at end of to recipients with properties {address:"javed.neemuth@prevoir.mu"}
-        make new attachment with properties {file name:POSIX file "/tmp/{TICKET_KEY}-analysis.pdf"} at after last paragraph
-        send
-    end tell
-end tell
-APPLESCRIPT
-echo "Mail send exit: $?"
-```
-
-If AppleScript returns a non-zero exit code, build the MIME message in Python and pipe to `sendmail -t -oi` (requires Postfix running — check with `mailq`; start with `sudo postfix start` if down):
-
-```bash
-python3 << 'EOF'
-import subprocess
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
-from datetime import datetime
-import os
-
-TICKET_KEY  = "{TICKET_KEY}"
-TICKET_NAME = "{Ticket Summary}"
-TO_EMAIL    = "javed.neemuth@prevoir.mu"
-FROM_EMAIL  = "javed.neemuth@prevoir.mu"
-PDF_PATH    = f"/tmp/{TICKET_KEY}-analysis.pdf"
-NOW         = datetime.now().strftime("%d %b %Y %H:%M:%S")
-
-msg = MIMEMultipart()
-msg["From"]    = FROM_EMAIL
-msg["To"]      = TO_EMAIL
-msg["Subject"] = f"{TICKET_KEY}: {TICKET_NAME} [ Claude Analysis completed ]"
-
-body = f"""Dear Javed,
-
-Please find the complete analysis performed by Claude for Jira ticket reference {TICKET_KEY}.
-
-View the attached PDF for more information.
-
-Report completed at {NOW}.
-
-Regards,
-Claude Code — 4C Dev Skill
-"""
-msg.attach(MIMEText(body, "plain"))
-
-with open(PDF_PATH, "rb") as f:
-    part = MIMEBase("application", "octet-stream")
-    part.set_payload(f.read())
-encoders.encode_base64(part)
-part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(PDF_PATH)}")
-msg.attach(part)
-
-proc = subprocess.Popen(["/usr/sbin/sendmail", "-t", "-oi"], stdin=subprocess.PIPE)
-proc.communicate(msg.as_bytes())
-print(f"sendmail exit: {proc.returncode}")
-EOF
-```
-
-#### 10d. Confirm Delivery
-
-After sending, confirm to the developer:
-```
-Report emailed to javed.neemuth@prevoir.mu
-Subject: {TICKET_KEY}: {Ticket Summary} [ Claude Analysis completed ]
-PDF: /tmp/{TICKET_KEY}-analysis.pdf
-Sent at: {current datetime}
-```
-
 ---
 
 ## Output Format
 
-Present output in clearly labelled sections matching the 10 steps above. Use markdown headings. Keep each section concise but complete. After Step 10, end with:
+Present output in clearly labelled sections matching the 9 steps above. Use markdown headings. Keep each section concise but complete. After Step 9, end with:
 
-> **Ready to code.** Branch is created. Start with `{primary file}:{line number}`. Analysis report has been emailed to javed.neemuth@prevoir.mu. Refer to Step 9 for the change summary and suggested commit message when done.
+> **Ready to code.** Branch is created. Start with `{primary file}:{line number}`. Refer to Step 9 for the change summary and suggested commit message when done.
 
 ---
 
 ## Project Context
 
-- **Repository:** `/Users/javed.neemuth/git/insight/`
+- **Repository:** `{REPO_DIR}/`
 - **Main branch:** `development`
 - **Branch format:** `Feature/{TICKET_KEY}_{Title}`
-- **Jira project:** `IV` (iNSight V1) — `https://prevoirsolutions.atlassian.net`
+- **Jira project:** `IV` — `https://prevoirsolutions.atlassian.net`
 - **Tech stack:** Java (GWT frontend, Spring-like backend), Oracle + PostgreSQL, Maven
 - **Key paths:**
   - Frontend: `fcfrontend/src/main/java/com/fc/fe/`

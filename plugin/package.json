@@ -1,8 +1,8 @@
 {
-  "name": "4c-internal-plugin",
+  "name": "prevoir-plugin",
   "version": "1.0.0",
   "private": true,
-  "description": "Internal 4C Group developer toolkit for iNSight V1 development workflow",
+  "description": "Internal Prevoir developer toolkit for V1 development workflow",
   "type": "module",
   "dependencies": {},
   "engines": {

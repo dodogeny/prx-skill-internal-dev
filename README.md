@@ -1,6 +1,6 @@
-# 4C Internal Dev Skill — Claude Code Plugin `v1.2.0`
+# Prevoir Internal Dev Skill — Claude Code Plugin `v1.0.0`
 
-A [Claude Code](https://claude.ai/code) plugin that gives Claude a structured, end-to-end developer workflow for V1 Jira tickets. Instead of manually reading a ticket, searching for files, and figuring out where to start, you invoke one command and Claude walks through the full cycle — from ticket ingestion to a proposed fix, archived report, and email delivery.
+A [Claude Code](https://claude.ai/code) plugin that gives Claude a structured, end-to-end developer workflow for V1 Jira tickets. Instead of manually reading a ticket, searching for files, and figuring out where to start, you invoke one command and Claude walks through the full cycle — from ticket ingestion to a proposed fix and archived report.
 
 ---
 
@@ -102,7 +102,6 @@ Claude compiles a compact **summary card** (not a full transcript) and archives 
 - Writes `/tmp/IV-XXXX-analysis.md` — a one-page card covering the problem, root cause, fix table, retest items, and commit message
 - Converts to PDF using `pandoc` (preferred) or Python `weasyprint`
 - Copies both files to `~/Documents/DevelopmentTasks/Claude-Analyzed-Tickets/`
-- Emails the PDF to the developer's configured address with the ticket summary in the subject line
 
 ---
 
@@ -146,7 +145,7 @@ When Claude Code first invokes the Atlassian MCP, it will prompt for credentials
 | Field | Value |
 |-------|-------|
 | Jira URL | `https://prevoirsolutions.atlassian.net` |
-| Email | your Atlassian account email (e.g. `you@4cgroup.co.za`) |
+| Email | your Atlassian account email (e.g. `you@prevoir.mu`) |
 | API Token | the token generated in step 2 |
 
 Credentials are stored securely in your local Claude Code config and are not committed to any repository.
@@ -163,7 +162,13 @@ If the Atlassian MCP is configured correctly, Claude will return the issue detai
 > **Note:** The API token grants the same permissions as your Atlassian account. Ensure your account has at minimum read access to the `IV` project in `prevoirsolutions.atlassian.net`.
 
 ### Git
-The repository at `/Users/<you>/git/insight/` must be present locally. The skill creates branches there.
+The repository must be present at `$HOME/git/insight/` locally. The skill resolves this path dynamically at runtime using `$HOME`. The skill creates branches there.
+
+> **Different repo location?** Open `plugin/skills/dev/SKILL.md` and update the `REPO_DIR` line in the **Configuration** section near the top:
+> ```
+> REPO_DIR = $HOME/git/insight
+> ```
+> Change `git/insight` to the path of your local repository relative to your home directory (e.g. `$HOME/projects/v1` or an absolute path like `/opt/repos/insight`).
 
 ### PDF Generation (for Step 8)
 The skill uses `pandoc` (preferred) or Python `weasyprint` to generate the PDF report. At least one must be available:
@@ -175,9 +180,6 @@ which pandoc
 pip3 install markdown2 weasyprint
 ```
 
-### Email Delivery (for Step 8)
-macOS Mail.app with a configured account, or Postfix (`sendmail`) running locally.
-
 ---
 
 ## Installation
@@ -185,8 +187,8 @@ macOS Mail.app with a configured account, or Postfix (`sendmail`) running locall
 ### 1. Clone this repository
 
 ```bash
-git clone https://github.com/4cgroup/4c-skill-internal-dev.git \
-  ~/.claude/plugins/marketplaces/4cgroup
+git clone https://github.com/dodogeny/prevoir-skill-internal-dev.git \
+  ~/.claude/plugins/marketplaces/prevoir
 ```
 
 ### 2. Register the marketplace
@@ -196,10 +198,10 @@ Add the following to `~/.claude/settings.json`:
 ```json
 {
   "extraKnownMarketplaces": {
-    "4cgroup": {
+    "prevoir": {
       "source": {
         "source": "directory",
-        "path": "/Users/<your-username>/.claude/plugins/marketplaces/4cgroup"
+        "path": "/Users/<your-username>/.claude/plugins/marketplaces/prevoir"
       }
     }
   }
@@ -212,14 +214,14 @@ Alternatively, if the repo is hosted on a Git server, use:
 ```json
 "source": {
   "source": "url",
-  "url": "https://github.com/4cgroup/4c-skill-internal-dev.git"
+  "url": "https://github.com/dodogeny/prevoir-skill-internal-dev.git"
 }
 ```
 
 ### 3. Install the plugin
 
 ```bash
-claude plugin install 4c-internal@4cgroup
+claude plugin install prevoir@prevoir
 ```
 
 ### 4. Verify
@@ -228,7 +230,7 @@ claude plugin install 4c-internal@4cgroup
 claude plugin list
 ```
 
-You should see `4c-internal@4cgroup` listed as installed.
+You should see `prevoir@prevoir` listed as installed.
 
 ---
 
@@ -237,7 +239,7 @@ You should see `4c-internal@4cgroup` listed as installed.
 Invoke the skill from any Claude Code session using any of these forms:
 
 ```
-/4c-internal:dev IV-3672
+/prevoir:dev IV-3672
 ```
 ```
 start dev on IV-3672
@@ -289,7 +291,6 @@ Commit: IV3672_Resolving_Cases_Should_Resolve_Alerts_1.26.064
 
 ## Step 8 — Archived
 PDF: ~/Documents/DevelopmentTasks/Claude-Analyzed-Tickets/IV-3672-analysis.pdf
-Email sent to javed.neemuth@4cgroup.co.za
 
 ## Step 9
 IV-3672 | ~14m elapsed | ~5,100 in / ~2,040 out tokens | est. cost $0.0462 (Sonnet 4.6)
@@ -326,7 +327,7 @@ The entire skill logic lives in `plugin/skills/dev/SKILL.md`. It is a markdown f
 Edit `plugin/skills/dev/SKILL.md`, commit, and push. Team members update with:
 
 ```bash
-claude plugin update 4c-internal@4cgroup
+claude plugin update prevoir@prevoir
 ```
 
 ---
@@ -352,4 +353,4 @@ The skill is purpose-built for the V1 codebase:
 
 ## License
 
-Internal use only — 4C Group.
+Internal use only — Prevoir.

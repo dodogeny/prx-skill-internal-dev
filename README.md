@@ -372,19 +372,56 @@ Edit `plugin/skills/dev/SKILL.md`, commit, and push to GitHub.
 
 ### For team members
 
-To pull the latest version of the skill:
+Choose whichever method matches how you installed the plugin:
+
+#### Option A — Git pull (recommended, fastest)
+
+If you cloned the marketplace repository during installation:
+
+**macOS / Linux:**
+```bash
+git -C ~/.claude/plugins/marketplaces/prevoir pull
+```
+
+**Windows (PowerShell):**
+```powershell
+git -C "$env:USERPROFILE\.claude\plugins\marketplaces\prevoir" pull
+```
+
+No restart or reinstall required — Claude reads the skill from disk on every invocation, so the update takes effect immediately.
+
+#### Option B — Claude plugin update command
 
 ```bash
 claude plugin update prevoir@prevoir
 ```
 
-Verify the update was applied:
+#### Option C — Re-clone
+
+If you encounter issues with the above, re-clone the marketplace directory:
+
+**macOS / Linux:**
+```bash
+rm -rf ~/.claude/plugins/marketplaces/prevoir
+git clone https://github.com/dodogeny/prevoir-skill-internal-dev.git \
+  ~/.claude/plugins/marketplaces/prevoir
+```
+
+**Windows (PowerShell):**
+```powershell
+Remove-Item -Recurse -Force "$env:USERPROFILE\.claude\plugins\marketplaces\prevoir"
+git clone https://github.com/dodogeny/prevoir-skill-internal-dev.git "$env:USERPROFILE\.claude\plugins\marketplaces\prevoir"
+```
+
+#### Verify the update
 
 ```bash
 claude plugin list
 ```
 
 The version number next to `prevoir@prevoir` should reflect the latest release.
+
+> **Not sure of the marketplace path?** Run `ls ~/.claude/plugins/marketplaces/` (macOS/Linux) or `dir $env:USERPROFILE\.claude\plugins\marketplaces\` (Windows) to confirm the folder name.
 
 ---
 

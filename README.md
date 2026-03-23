@@ -528,6 +528,43 @@ claude plugin update prevoir@prevoir
 
 ---
 
+## Version History
+
+### v1.0.0 — Initial Release
+
+| # | Step | Feature |
+|---|------|---------|
+| 1 | Ingest Ticket | Fetches Jira issue fields (summary, type, priority, status, assignee, reporter, labels, components, fix version, affected versions, description, comments, attachments) |
+| 2 | Analyse & Contextualise | Attachment & diagnostic artefact analysis (screenshots, log files, thread dumps, memory/heap dumps, XML/config, draw.io diagrams) up to 10 MB per file |
+| 2 | Analyse & Contextualise | Problem statement with bug vs enhancement classification |
+| 2 | Analyse & Contextualise | Prior investigation carry-forward — extracts known root causes and findings from comments to avoid re-investigation |
+| 2 | Analyse & Contextualise | Optional draw.io issue diagram for non-trivial data flows |
+| 3 | Create Branch | Three-tier base branch priority: Fix Version → Affected Versions → `development` |
+| 3 | Create Branch | Pauses and asks if base branch cannot be confirmed locally or remotely |
+| 4 | Locate Code | Grep-first, read-second approach — never reads full files speculatively |
+| 4 | Locate Code | File map table with role, key location, and recent git history per file |
+| 4 | Locate Code | Confidence gate — pauses and asks if relevant code cannot be located with certainty |
+| 5 | Replicate Issue | Numbered reproduction steps with prerequisites, expected result, actual result |
+| 5 | Replicate Issue | Confidence gate — Low confidence pauses and asks; Medium notes assumptions and proceeds |
+| 6 | Propose Fix | Root cause analysis with exact `ClassName.java:line` references |
+| 6 | Propose Fix | Before/after code change blocks per file |
+| 6 | Propose Fix | Interactive apply-to-branch — `yes` / `no` / `partial` selection |
+| 6 | Propose Fix | DB migration scripts for both Oracle (`.sql`) and PostgreSQL (`.pg`) |
+| 7 | Impact & Risk | Usage reference search — greps full codebase for all callers of modified methods, classes, and fields |
+| 7 | Impact & Risk | Application-wide layer impact table (GWT Frontend, Backend API, Plugin/Workers, DB/Schema, Shared Utilities) |
+| 7 | Impact & Risk | Regression risk analysis per change |
+| 7 | Impact & Risk | Affected clients/environments classification (generic / client-specific / DB-specific) |
+| 7 | Impact & Risk | Retest checklist derived from actual callers found |
+| 7 | Impact & Risk | Objective risk rating: Low (0–1 callers) / Medium (2–5) / High (6+ or DB/shared utility) |
+| 7 | Impact & Risk | Suggested commit message in project convention format |
+| 8 | Change Summary | Files touched table with action and summary per file |
+| 9 | Session Stats | Elapsed time, estimated token usage, and estimated cost at Sonnet 4.6 pricing |
+| 10 | PDF Report | PDF generation via pandoc → Chrome headless → HTML fallback |
+| 10 | PDF Report | Configurable output folder via `$CLAUDE_REPORT_DIR` (defaults to `~/Documents/Claude-Analyzed-Tickets/`) |
+| 10 | PDF Report | Confirms output folder and full file path after saving |
+
+---
+
 ## License
 
 Internal use only — Prevoir.

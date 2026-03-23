@@ -152,9 +152,13 @@ This summary must be referenced in Step 7 (Propose the Fix) — build the soluti
 
 #### 4a. Determine the Base Branch
 
-Check the **Affected Versions** field from the Jira ticket (from Step 1).
+Use the following priority order to determine the base branch:
 
-| Affected Version value | Base branch to use |
+1. Check **Fix Versions** first — if set, use it
+2. If **Fix Versions** is empty, check **Affected Versions** — if set, use it
+3. If both are empty, use `development`
+
+| Version value          | Base branch to use |
 |------------------------|-------------------|
 | Not set / empty        | `development`     |
 | e.g. `1.24.292.p1`    | `1.24.292`        |
@@ -439,10 +443,10 @@ After Step 9 is complete, generate a full PDF report of the analysis and save it
 Resolve the output folder using this priority order:
 
 1. If the environment variable `CLAUDE_REPORT_DIR` is set, use it
-2. Otherwise default to: `$HOME/Documents/Claude-Analyzed-Tickets/`
+2. Otherwise default to: `$HOME/Documents/DevelopmentTasks/Claude-Analyzed-Tickets/`
 
 ```bash
-REPORT_DIR="${CLAUDE_REPORT_DIR:-$HOME/Documents/Claude-Analyzed-Tickets}"
+REPORT_DIR="${CLAUDE_REPORT_DIR:-$HOME/Documents/DevelopmentTasks/Claude-Analyzed-Tickets}"
 mkdir -p "$REPORT_DIR"
 ```
 

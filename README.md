@@ -151,6 +151,198 @@ Claude generates a full PDF report of the complete analysis and saves it to a co
 
 ---
 
+## Polling Script Setup
+
+The polling script monitors Jira for tickets assigned to you with status **To Do**, **Open**, **Parked**, or **Blocked**, and triggers the dev skill automatically for any new ones found. Follow the steps for your operating system.
+
+---
+
+### Step 1 — Get your Jira API token
+
+1. Log in to [https://id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
+2. Click **Create API token**
+3. Name it (e.g. `Prevoir Poll Jira`) and click **Create**
+4. Copy the token — it will not be shown again
+
+---
+
+### Step 2 — Download the script files
+
+Copy `poll-jira.sh` from this repository to your scripts folder:
+
+**macOS / Linux:**
+```bash
+# Create the scripts folder
+mkdir -p ~/Documents/Prevoir/Scripts
+
+# Copy files from this repo
+cp poll-jira.sh ~/Documents/Prevoir/Scripts/
+```
+
+**Windows (WSL terminal):**
+```bash
+mkdir -p ~/prevoir-scripts
+cp /mnt/c/path/to/poll-jira.sh ~/prevoir-scripts/
+```
+
+---
+
+### Step 3 — Create the credentials file
+
+Create a file named `.jira-credentials` in the same folder as `poll-jira.sh`. Replace the dummy values with your real details:
+
+**macOS / Linux:**
+```bash
+cat > ~/Documents/Prevoir/Scripts/.jira-credentials << 'EOF'
+JIRA_USER="firstname.lastname@prevoir.mu"
+JIRA_TOKEN="your-api-token-here"
+EOF
+
+chmod 600 ~/Documents/Prevoir/Scripts/.jira-credentials
+```
+
+**Windows (WSL terminal):**
+```bash
+cat > ~/prevoir-scripts/.jira-credentials << 'EOF'
+JIRA_USER="firstname.lastname@prevoir.mu"
+JIRA_TOKEN="your-api-token-here"
+EOF
+
+chmod 600 ~/prevoir-scripts/.jira-credentials
+```
+
+The file should look like this (dummy values shown):
+
+```bash
+JIRA_USER="john.doe@prevoir.mu"
+JIRA_TOKEN="ATATT3xFfGF0tNH4BP5CQ3NHz8YraPNlH1pj1QzcsBNq4ZcG_XXXXXXXXXXXXXXXX"
+```
+
+> **Security:** `chmod 600` restricts the file to your user account only. Never commit this file to git — it is listed in `.gitignore`.
+
+---
+
+### Step 4 — Make the script executable
+
+**macOS / Linux / WSL:**
+```bash
+chmod +x ~/Documents/Prevoir/Scripts/poll-jira.sh      # macOS / Linux
+chmod +x ~/prevoir-scripts/poll-jira.sh                # WSL
+```
+
+---
+
+### Step 5 — Test it manually
+
+Run the script once to confirm it connects to Jira and processes tickets correctly:
+
+**macOS / Linux:**
+```bash
+bash ~/Documents/Prevoir/Scripts/poll-jira.sh
+```
+
+**Windows (WSL):**
+```bash
+bash ~/prevoir-scripts/poll-jira.sh
+```
+
+Then check the log:
+
+```bash
+tail -20 ~/Documents/Prevoir/Scripts/poll-jira.log     # macOS / Linux
+tail -20 ~/prevoir-scripts/poll-jira.log               # WSL
+```
+
+Expected output for a successful run with no new tickets:
+
+```
+2026-03-25 10:00:01 Polling Jira for Parked/Blocked tickets...
+2026-03-25 10:00:02 No Parked/Blocked tickets found.
+2026-03-25 10:00:02 Done. 0 new ticket(s) processed.
+```
+
+Expected output when a new ticket is found:
+
+```
+2026-03-25 10:00:01 Polling Jira for Parked/Blocked tickets...
+2026-03-25 10:00:02 New ticket detected: IV-3891 — starting analysis
+2026-03-25 10:12:44 Analysis complete for IV-3891 (exit 0)
+2026-03-25 10:12:44 Done. 1 new ticket(s) processed.
+```
+
+Common errors:
+
+| Log message | Cause | Fix |
+|-------------|-------|-----|
+| `ERROR: Credentials file not found` | `.jira-credentials` missing or wrong path | Re-run Step 3 |
+| `ERROR: Jira API returned HTTP 401` | Invalid API token or wrong email | Regenerate token at id.atlassian.com |
+| `ERROR: Jira API returned HTTP 403` | Account lacks access to the IV project | Ask your Jira admin to grant read access |
+| `ERROR: Jira API returned HTTP 404` | Wrong Jira base URL | Verify `JIRA_BASE` in the script |
+
+---
+
+### Step 6 — Schedule it
+
+#### macOS — register the launchd job
+
+```bash
+# Copy the plist
+cp com.prevoir.poll-jira.plist ~/Library/LaunchAgents/
+
+# Register (starts immediately and persists across reboots)
+launchctl load ~/Library/LaunchAgents/com.prevoir.poll-jira.plist
+
+# Verify
+launchctl list | grep com.prevoir.poll-jira
+```
+
+Enable **Power Nap** so the job can fire while the lid is closed on mains power:
+> System Settings → Battery → Options → Enable Power Nap
+
+#### Linux — add a cron entry
+
+```bash
+crontab -e
+```
+
+Add this line (runs every 60 minutes):
+
+```
+0 * * * * DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus /bin/bash $HOME/Documents/Prevoir/Scripts/poll-jira.sh
+```
+
+Verify the cron entry was saved:
+
+```bash
+crontab -l
+```
+
+#### Windows — Task Scheduler
+
+1. Open **Task Scheduler** → **Create Basic Task**
+2. **Name:** `Prevoir Poll Jira`
+3. **Trigger:** Daily → check **Repeat task every 1 hour**
+4. **Action:** Start a program
+   - **Program:** `wsl`
+   - **Arguments:** `bash /home/<your-wsl-username>/prevoir-scripts/poll-jira.sh`
+5. On the **General** tab: select **"Run only when user is logged on"**
+6. Click **Finish**
+
+Verify by right-clicking the task → **Run** and checking the log file in WSL.
+
+---
+
+### Step 7 — Verify end-to-end
+
+Once scheduled, confirm the job fires correctly by checking the log after the first scheduled run:
+
+```bash
+tail -f ~/Documents/Prevoir/Scripts/poll-jira.log      # macOS / Linux (live tail)
+tail -f ~/prevoir-scripts/poll-jira.log                # WSL
+```
+
+---
+
 ## Prerequisites
 
 ### Claude Code
@@ -410,7 +602,7 @@ In addition to manual invocation, the skill supports a fully automated mode that
 
 A shell script (`poll-jira.sh`) runs **every 60 minutes** via macOS `launchd`. It:
 
-1. Queries Jira for tickets assigned to you with status **Parked** or **Blocked**
+1. Queries Jira for tickets assigned to you with status **To Do**, **Open**, **Parked**, or **Blocked**
 2. Compares against a local seen-tickets cache — skips anything already processed
 3. For each new ticket, runs the skill with `AUTO_MODE=true` (analysis-only mode — see below)
 4. Sends a macOS notification when analysis is complete
@@ -441,32 +633,138 @@ The full 11-step analysis still runs and the PDF report is saved to disk. The de
 | `poll-jira.log` | `~/Documents/Prevoir/Scripts/` | Full run log with timestamps |
 | `com.prevoir.poll-jira.plist` | `~/Library/LaunchAgents/` | macOS launchd job — fires every 60 minutes, Power Nap compatible |
 
-### One-time setup
+### Platform support
+
+The script (`poll-jira.sh`) is cross-platform bash. It detects the OS at runtime and uses the appropriate notification mechanism:
+
+| Platform | Notifications | Scheduler |
+|----------|--------------|-----------|
+| macOS | `osascript` (built-in) | `launchd` |
+| Linux | `notify-send` (`libnotify`) | `cron` |
+| Windows | WSL + PowerShell balloon tip | Task Scheduler |
+
+---
+
+### macOS setup
 
 The scripts are already installed and the launchd job is registered. No further setup is required.
 
-To verify the job is loaded:
+Verify the job is loaded:
 
 ```bash
 launchctl list | grep com.prevoir.poll-jira
 ```
 
-### Running manually
+Enable **Power Nap** so the job can fire while the lid is closed on mains power:
 
-To trigger a poll immediately without waiting for the scheduled time:
+> System Settings → Battery → Options → Enable Power Nap
 
-```bash
-bash ~/Documents/Prevoir/Scripts/poll-jira.sh
-```
-
-### Managing the schedule
+Manage the schedule:
 
 ```bash
-# Disable (stop the daily schedule)
+# Disable
 launchctl unload ~/Library/LaunchAgents/com.prevoir.poll-jira.plist
 
 # Re-enable
 launchctl load ~/Library/LaunchAgents/com.prevoir.poll-jira.plist
+```
+
+---
+
+### Linux setup
+
+#### 1. Copy the script and credentials
+
+```bash
+mkdir -p ~/prevoir-scripts
+cp poll-jira.sh ~/prevoir-scripts/
+cp .jira-credentials ~/prevoir-scripts/
+chmod 600 ~/prevoir-scripts/.jira-credentials
+chmod +x ~/prevoir-scripts/poll-jira.sh
+```
+
+#### 2. Install notification support (if not already present)
+
+```bash
+# Debian / Ubuntu
+sudo apt install libnotify-bin
+
+# Fedora / RHEL
+sudo dnf install libnotify
+```
+
+> If `notify-send` is unavailable, the script still runs — notifications are silently skipped and all activity is logged to `poll-jira.log`.
+
+#### 3. Schedule with cron
+
+```bash
+crontab -e
+```
+
+Add this line to run every 60 minutes:
+
+```
+0 * * * * /bin/bash $HOME/prevoir-scripts/poll-jira.sh
+```
+
+> **Note:** cron jobs do not inherit your desktop session, so `notify-send` may not display if `DBUS_SESSION_BUS_ADDRESS` is not set. To fix this, add the following at the top of the cron entry:
+> ```
+> 0 * * * * DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus /bin/bash $HOME/prevoir-scripts/poll-jira.sh
+> ```
+
+---
+
+### Windows setup (via WSL)
+
+The script runs inside WSL (Windows Subsystem for Linux). Notifications appear as Windows balloon tips via PowerShell.
+
+#### 1. Enable WSL (if not already installed)
+
+Open PowerShell as Administrator and run:
+
+```powershell
+wsl --install
+```
+
+Restart when prompted. Ubuntu is installed by default.
+
+#### 2. Copy the script into WSL
+
+From inside a WSL terminal:
+
+```bash
+mkdir -p ~/prevoir-scripts
+cp /mnt/c/path/to/poll-jira.sh ~/prevoir-scripts/
+cp /mnt/c/path/to/.jira-credentials ~/prevoir-scripts/
+chmod 600 ~/prevoir-scripts/.jira-credentials
+chmod +x ~/prevoir-scripts/poll-jira.sh
+```
+
+#### 3. Install dependencies inside WSL
+
+```bash
+sudo apt update && sudo apt install curl python3
+```
+
+#### 4. Schedule with Windows Task Scheduler
+
+1. Open **Task Scheduler** → **Create Basic Task**
+2. Name: `Prevoir Poll Jira`
+3. Trigger: **Daily**, repeat every **1 hour**
+4. Action: **Start a program**
+   - Program: `wsl`
+   - Arguments: `bash /home/<your-wsl-username>/prevoir-scripts/poll-jira.sh`
+5. Finish
+
+> Ensure the task is set to **"Run only when user is logged on"** so WSL and PowerShell notifications work correctly.
+
+---
+
+### Running manually (all platforms)
+
+```bash
+bash ~/Documents/Prevoir/Scripts/poll-jira.sh        # macOS
+bash ~/prevoir-scripts/poll-jira.sh                  # Linux / WSL
 ```
 
 ### Resetting the seen-tickets cache
@@ -474,7 +772,8 @@ launchctl load ~/Library/LaunchAgents/com.prevoir.poll-jira.plist
 If you want the script to re-analyse tickets it has already processed, clear the cache:
 
 ```bash
-> ~/Documents/Prevoir/Scripts/.jira-seen-tickets
+> ~/Documents/Prevoir/Scripts/.jira-seen-tickets       # macOS
+> ~/prevoir-scripts/.jira-seen-tickets                 # Linux / WSL
 ```
 
 ---
@@ -631,8 +930,8 @@ claude plugin update prevoir@prevoir
 | # | Area | Change |
 |---|------|--------|
 | 1 | Skill — Headless Mode | Added `AUTO_MODE=true` support — all interactive gates bypass with safe defaults; branch creation and file edits are skipped; full analysis and PDF report still run |
-| 2 | Automation — `poll-jira.sh` | New polling script — queries Jira daily for Parked/Blocked tickets assigned to the current user and triggers headless analysis for each new ticket found |
-| 3 | Automation — `com.prevoir.poll-jira.plist` | macOS launchd job — fires `poll-jira.sh` at 10:00 AM daily; logs stdout and stderr separately |
+| 2 | Automation — `poll-jira.sh` | New cross-platform polling script — queries Jira every 60 minutes for Parked/Blocked tickets; detects OS at runtime and uses `osascript` (macOS), `notify-send` (Linux), or PowerShell balloon tip (Windows WSL) for notifications |
+| 3 | Automation — `com.prevoir.poll-jira.plist` | macOS launchd job — fires every 60 minutes via `StartInterval`; Power Nap compatible; logs stdout and stderr separately |
 | 4 | Automation — `.jira-credentials` | Credentials file (chmod 600) — keeps API token out of the script body |
 | 5 | README — Fix | Removed duplicate Step 9/Step 10 headings in the What It Does section |
 | 6 | README — Automated Polling section | New section documenting headless mode, the polling script, file locations, setup, and cache management |

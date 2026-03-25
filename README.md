@@ -1,4 +1,4 @@
-# Prevoir Internal Dev Skill — Claude Code Plugin `v1.1.0`
+# Prevoir Internal Dev Skill — Claude Code Plugin `v1.2.0`
 
 A [Claude Code](https://claude.ai/code) plugin that gives Claude a structured, end-to-end developer workflow for V1 Jira tickets. Instead of manually reading a ticket, searching for files, and figuring out where to start, you invoke one command and Claude walks through the full cycle — from ticket ingestion to a proposed fix and archived report.
 
@@ -6,7 +6,7 @@ A [Claude Code](https://claude.ai/code) plugin that gives Claude a structured, e
 
 ## What It Does
 
-When you hand Claude a Jira ticket key (`IV-XXXX`), the skill executes **11 steps automatically**, presenting output at each step as it completes.
+When you hand Claude a Jira ticket key (`IV-XXXX`), the skill executes **12 steps automatically**, presenting output at each step as it completes.
 
 ---
 
@@ -20,7 +20,7 @@ If the MCP call fails (authentication error, ticket not found, MCP not running),
 
 ### Step 2 — Analyse & Contextualise
 
-Claude analyses everything gathered in Step 1 and produces:
+Claude analyses the ticket description and all attachments, and produces:
 
 - **Attachment review & diagnostic artefact analysis** — All qualifying attachments up to 10 MB are downloaded and analysed. Binary files, archives, and files over 10 MB are skipped automatically. Each attachment is identified by filename, type, and a one-line finding before detailed analysis:
   - *Screenshots / images* — UI state, error banners, field values, and any visible error codes are described
@@ -29,14 +29,26 @@ Claude analyses everything gathered in Step 1 and produces:
   - *Memory / heap dumps* — dominant object type identified, exhausted heap space noted, GC patterns extracted
   - *XML / config files* — relevant config values checked for incorrect or missing entries
   - *draw.io diagrams* — flow depicted is described
-  All findings are carried forward into the root cause analysis in Step 7.
+  All attachment findings are carried forward into the root cause analysis in Step 7.
 - **Problem statement** — A concise description of what is broken or missing, who is affected, what the expected behaviour is, what the current behaviour is, and a clear list of acceptance criteria. Bugs are explicitly labelled as defects; enhancements are explicitly labelled as stories.
-- **Prior investigation summary** — If any comments contain previous investigation work (root cause findings, code traces, attempted fixes, identified files, or partial solutions), Claude extracts and carries these forward as known context. This prevents re-investigating what is already established.
 - **Issue diagram** (optional) — For issues involving a non-obvious data flow or multi-step component interaction, Claude generates a draw.io XML diagram (`.drawio` file) showing the happy path alongside the broken path, annotated with the key method calls and data values involved. Trivial single-file bugs skip this automatically.
 
 ---
 
-### Step 3 — Create Development Branch
+### Step 3 — Read Comments & Context
+
+Claude fetches all comments on the ticket and extracts:
+
+- **Clarifications** from the reporter or PO that affect scope or behaviour
+- **Decisions** made in comments that change the implementation approach
+- **Known constraints, edge cases, or related tickets** referenced by the team
+- **Prior investigation summary** — if any comments contain previous investigation work (root cause findings, code traces, attempted fixes, identified files, or partial solutions), Claude extracts these as a structured block and carries them forward as known context for Steps 5, 7, and 8. This prevents re-investigating what is already established.
+
+If there are no comments, Claude states this and proceeds from the description only.
+
+---
+
+### Step 4 — Create Development Branch
 
 Claude determines the correct base branch using a three-tier priority:
 
@@ -50,7 +62,7 @@ The feature branch is named: `Feature/IV-XXXX_Ticket_Summary_In_Title_Case` and 
 
 ---
 
-### Step 4 — Locate Affected Code
+### Step 5 — Locate Affected Code
 
 Claude searches the V1 codebase using a **grep-first, read-second** approach — it never reads an entire file speculatively. The flow is:
 
@@ -66,7 +78,7 @@ A **confidence gate** runs after the file map: if Claude cannot locate the relev
 
 ---
 
-### Step 5 — Replicate the Issue
+### Step 6 — Replicate the Issue
 
 Claude produces complete, numbered reproduction instructions that any developer on the team can follow without prior knowledge of the issue:
 
@@ -76,22 +88,141 @@ Claude produces complete, numbered reproduction instructions that any developer 
 - **Actual result** — the exact symptom the reporter observes
 - **Service restart guidance** — which spawner, worker, or application server must be restarted to pick up the fix during local testing, listed per layer (Plugin/Worker, Backend API, GWT Frontend)
 
-A **confidence gate** applies: High confidence proceeds automatically; Medium notes the assumption and proceeds; Low pauses and asks the developer to clarify before continuing to the fix.
+A **confidence gate** applies: High confidence proceeds automatically; Medium notes the assumption and proceeds; Low pauses and asks the developer to clarify before continuing to Step 7.
 
 ---
 
-### Step 6 — Propose the Fix
+### Step 7 — Root Cause Analysis (Engineering Panel)
 
-Claude reads the identified files (using targeted line ranges from Step 4) and produces:
+This is the most rigorous step in the workflow. A four-person senior engineering team convenes: **Morgan** (Lead Developer) chairs and has final authority; **Alex**, **Sam**, and **Jordan** (Senior Engineers) investigate independently under a time constraint and compete for the best analysis. The team debates, challenges each other's findings, and converges on a single agreed root cause.
 
-- **Root cause analysis** — a precise explanation of *why* the bug occurs or *why* the feature is missing, with specific `ClassName.java:line` references. Builds on any prior investigation from Step 2 (including thread/memory dump findings) rather than re-deriving known facts.
-- **Code changes** — only the code that needs to change, shown as clear before/after blocks. Each change is explained individually.
+#### 7a. The Team
+
+| Role | Name | Background | Mandate |
+|------|------|-----------|---------|
+| **Lead Developer** | **Morgan** | 20 yrs Java, ex-systems architect, deep GWT/Spring/Oracle | Chairs. Sets schedule. Reviews hypotheses. Asks probing questions. Facilitates debate. Gives binding verdict. Approves the Root Cause Statement. |
+| Senior Engineer | Alex | 12 yrs Java/GWT | Code archaeology & regression forensics — *"Every bug has a birthday."* |
+| Senior Engineer | Sam | 10 yrs full-stack Java, Spring, GWT RPC | Runtime data flow & logic — *"Follow the data to the divergence point."* |
+| Senior Engineer | Jordan | 15 yrs Java, architect background | Defensive patterns & structural anti-patterns — *"I've catalogued every way Java devs shoot themselves in the foot."* |
+
+Morgan is not competing — Morgan arbitrates. Morgan's verdict is binding and may endorse, refine, or override any engineer's hypothesis.
+
+#### 7b. How the Session Runs
+
+The investigation runs across six sequential phases in a defined time block:
+
+| Phase | Who | Time | What happens |
+|-------|-----|------|-------------|
+| **Briefing** | Morgan | 1 min | Reads ticket + file map, assigns focus areas to each engineer, sets schedule |
+| **Investigation** | Alex, Sam, Jordan | 4 min | Each investigates independently — max 8 targeted operations per engineer |
+| **Mid-point check-in** | All | T+2 min | Engineers report progress to Morgan; Morgan acknowledges or redirects |
+| **Hypothesis submission** | Alex, Sam, Jordan | T+4 min | Each submits final structured hypothesis with evidence |
+| **Cross-examination & debate** | Morgan + team | T+5–6 min | Morgan poses 1–2 probing questions per hypothesis; one round of engineer-to-engineer challenges |
+| **Morgan's verdict** | Morgan | T+6 min | Scores hypotheses, weighs in personally, declares adopted root cause |
+
+Total session: approximately **6–8 minutes**.
+
+#### 7c. Investigation Budget (Engineers)
+
+Each engineer has a maximum of **8 targeted grep/read operations** in their 4-minute window:
+- High-confidence evidence found in ≤ 4 ops → stop and report immediately
+- No clear hypothesis after 8 ops → commit to best available with Medium/Low confidence and state what would confirm it
+- Every claim requires a `file:line` or commit reference — unsupported assertions are challenged by Morgan
+
+Morgan may run up to **4 additional targeted reads** independently to verify contested claims.
+
+#### 7d. Diagnostic Decision Tree
+
+Before engineers begin, the failure mode is classified:
+- **BUG — Data Issue** → NPE, field mapping error, SQL/ORM misconfiguration
+- **BUG — UI Issue** → GWT callback not wired, RPC error swallowed, missing panel reload
+- **BUG — Async/Timing Issue** → race condition, deadlock, out-of-order execution
+- **BUG — Regression** → was working, now broken — Alex leads
+- **Enhancement** → pure addition or modification of existing flow
+
+The classification drives each engineer's priority order and Morgan's briefing focus.
+
+#### 7e. Scoring & Verdict
+
+Morgan applies an 8-criterion scoring rubric (max 14 pts per hypothesis):
+
+| Criterion | Pts |
+|-----------|-----|
+| Specific `file:line` with code evidence | +3 |
+| Fix direction clear and immediately actionable | +2 |
+| Explains intermittent behaviour (if applicable) | +2 |
+| Self-rated High confidence supported by evidence | +1 |
+| Corroborated by another engineer independently | +2 |
+| Found efficiently (≤ 5 ops) | +1 |
+| Survived cross-examination without revision | +2 |
+| Debate challenge successfully deflected with evidence | +1 |
+
+The highest scorer wins. Morgan may endorse unchanged, refine with debate findings, or override all three if a read reveals something the team missed. Morgan's personal assessment always accompanies the score.
+
+Verdict is displayed as one of:
+
+```
+╔══════════════════════════════════════════════════════════════════╗
+║  🏆  BEST ANALYSIS: {Name}           Score: {N} / 14 pts        ║
+║  Morgan: "{Endorsement or refinement note}"                      ║
+╚══════════════════════════════════════════════════════════════════╝
+```
+```
+╔══════════════════════════════════════════════════════════════════╗
+║  🤝  CONSENSUS: {Name} & {Name} — same root cause independently  ║
+║  Morgan: "{Confirmation note}"                                   ║
+╚══════════════════════════════════════════════════════════════════╝
+```
+```
+╔══════════════════════════════════════════════════════════════════╗
+║  ⚡  MORGAN OVERRIDE — independent read required                  ║
+║  Morgan: "{What Morgan found that the team missed}"              ║
+╚══════════════════════════════════════════════════════════════════╝
+```
+
+#### 7f. Root Cause Statement — Team Sign-Off
+
+The final root cause statement is authored by the winning engineer and approved by Morgan:
+
+```
+ROOT CAUSE STATEMENT
+────────────────────────────────────────────────────────────────────
+Author    : {Winning Engineer}  |  Approved by: Morgan
+Location  : {file:line}
+Mechanism : [how the bug manifests — precise, code-level]
+Trigger   : [what user action or event makes it observable]
+Fix dir.  : [one sentence on the correct fix — detail in Step 8]
+Confidence: High / Medium / Low
+Team note : [any nuance raised in debate that the fix author must
+             not overlook — omit if none]
+────────────────────────────────────────────────────────────────────
+```
+
+#### 7g. Morgan Reviews the Proposed Fix (Step 8 gate)
+
+After the fix is proposed in Step 8, Morgan vets it against the Root Cause Statement across five checks: mechanism alignment, surgical scope, regression risk, team note honoured, and DB safety. Verdict is one of:
+
+- **✅ APPROVED** — fix is correct, surgical, and safe to apply
+- **⚠️ APPROVED WITH CONDITIONS** — apply after addressing a specific requirement
+- **🔄 REWORK REQUIRED** — fix does not address the mechanism; Morgan provides direction for revision
+
+The fix is not applied until Morgan approves.
+
+---
+
+### Step 8 — Propose the Fix
+
+Claude reads the identified files (using targeted line ranges from Step 5) and produces a fix grounded in the Root Cause Statement from Step 7:
+
+- **Proposed solution** — plain-language description of the approach before any code is shown
+- **Code changes** — only the code that needs to change, shown as clear before/after blocks. Each change is explicitly tied to the root cause mechanism.
+- **Alternative approaches** — a brief table of alternatives considered and why they were rejected
 - **Apply to branch (interactive)** — after presenting the fix, Claude asks whether to apply the changes directly to the feature branch. Options: `yes` (apply all), `no` (developer applies manually), `partial` (apply selected files only). Changes are applied using targeted edits — no commit is made.
 - **DB migration scripts** — if the fix requires schema changes, both an Oracle (`.sql`) and a PostgreSQL (`.pg`) script are provided. V1 supports both engines and SQL syntax is not assumed to be compatible across them.
 
 ---
 
-### Step 7 — Impact Analysis
+### Step 9 — Impact Analysis
 
 A full review of the consequences of the fix across the entire application — backed by active codebase searching, not assumptions:
 
@@ -105,29 +236,18 @@ A full review of the consequences of the fix across the entire application — b
 
 ---
 
-### Step 8 — Change Summary (Steps 8 & 9 in SKILL.md)
+### Step 10 — Change Summary
 
 Claude compiles a developer-ready summary covering:
 
 - **Files touched** — table of every file modified, created, or deleted with a one-line description
 - **What changed and why** — one paragraph per file explaining the change and the reasoning
 - **Suggested commit message** — ready-to-paste, following the project convention: `IV-XXXX_Title_VERSION`
-- **PR description template** — a fully populated pull request body including Jira link, branch, risk level, what changed, how to test, retest areas, and DB migration flag — ready to paste directly into GitHub/Bitbucket
+- **PR description template** — a fully populated pull request body including Jira link, branch, **root cause statement** from Step 6, risk level, what changed, how to test, retest areas, and DB migration flag — ready to paste directly into GitHub/Bitbucket
 
 ---
 
-### Step 9 — Change Summary
-
-Claude compiles a developer-ready summary covering:
-
-- **Files touched** — table of every file modified, created, or deleted with a one-line description
-- **What changed and why** — one paragraph per file explaining the change and the reasoning
-- **Suggested commit message** — ready-to-paste, following the project convention: `IV-XXXX_Title_VERSION`
-- **PR description template** — a fully populated pull request body including Jira link, branch, risk level, what changed, how to test, retest areas, and DB migration flag — ready to paste directly into GitHub/Bitbucket
-
----
-
-### Step 10 — Session Stats
+### Step 11 — Session Stats
 
 Prints a single summary line with elapsed time, estimated token usage, and estimated cost at Sonnet 4.6 pricing:
 
@@ -137,7 +257,7 @@ IV-3672 | ~14m elapsed | ~5,100 in / ~2,040 out tokens | est. cost $0.0462 (Sonn
 
 ---
 
-### Step 11 — PDF Analysis Report
+### Step 12 — PDF Analysis Report
 
 Claude generates a full PDF report of the complete analysis and saves it to a configurable output folder:
 
@@ -398,7 +518,7 @@ The repository must be present at `$HOME/git/insight/` locally. The skill resolv
 > ```
 > Change `git/insight` to the path of your local repository relative to your home directory (e.g. `$HOME/projects/v1` or an absolute path like `/opt/repos/insight`).
 
-### PDF Generation (for Step 11)
+### PDF Generation (for Step 12 — PDF Report)
 
 The skill tries three methods in order — no setup is required if Chrome or Chromium is already installed.
 
@@ -572,7 +692,7 @@ https://prevoirsolutions.atlassian.net/browse/IV-3672
 
 > `/dev` is the shorthand — it uses just the skill name. `/prevoir:dev` is the fully qualified form that includes the plugin namespace. Both work; use the fully qualified form if another installed plugin also has a skill named `dev`.
 
-Claude will immediately begin executing all 11 steps in order, presenting output for each step as it completes.
+Claude will immediately begin executing all 12 steps in order, presenting output for each step as it completes.
 
 ### Example output structure
 
@@ -584,41 +704,180 @@ Summary: Resolving Cases should Resolve Alerts
 
 ## Step 2 — Analysis & Context
 Problem: Alert Central alerts remain open after a case is resolved...
-Prior Investigation: None — proceeding fresh.
 Diagram saved to /tmp/IV-3672-diagram.drawio
 
-## Step 3 — Branch Created
+## Step 3 — Comments & Context
+No prior investigation in comments — proceeding fresh.
+No constraints or edge cases noted.
+
+## Step 4 — Branch Created
 Base branch: Feature/Release_1.26.064 (Fix Version set; Feature/Release branch found)
 Created: Feature/IV-3672_Resolving_Cases_Should_Resolve_Alerts
 HEAD: abc1234
 
-## Step 4 — Affected Code
+## Step 5 — Affected Code
 | File | Role | Key Location | Recent Git History |
 ...
 File map confidence: High — proceeding.
 
-## Step 5 — Replicate the Issue
+## Step 6 — Replicate the Issue
 Prerequisites: ...
 Steps: 1. Log in as admin...
 Confidence: Medium
 Restart: Backend-only change — restart the application server (Tomcat/embedded).
 
-## Step 6 — Proposed Fix
-Root cause: CaseManager.java:2272 — pendingAlertResolve flag is never set...
-Before/After: ...
+## Step 7 — Root Cause Analysis (Engineering Panel)
+Decision tree path: BUG → UI Issue → Boolean Flag Not Reset
 
-## Step 7 — Impact Analysis
+── Morgan — Briefing ─────────────────────────────────────────────
+Ticket: IV-3672 — Resolving Cases should Resolve Alerts
+Classification: BUG → UI Issue → likely flag or callback not wired
+Alex  → Check git history on CaseManager.java near resolveCase()
+Sam   → Trace from the resolve button click down through the save callback
+Jordan → Lead with patterns #1, #2, #3 (UI issue classification)
+Schedule: T+2 check-in, T+4 hypotheses due, T+6 verdict
+──────────────────────────────────────────────────────────────────
+
+── Mid-Point Check-In (T+2) ──────────────────────────────────────
+Alex  (3/8 ops): Found commit abc1234 — looks like a flag removal. Diffing now.
+Sam   (3/8 ops): Traced to resolveCase():2272 — save callback fires but no alert chain reached.
+Jordan (1/8 ops): Pattern #2 matched immediately at CaseManager.java:2272.
+
+Morgan: Alex, confirm whether the removal was intentional — check the commit message.
+        Sam and Jordan, you're converging on the same location — finish your evidence.
+──────────────────────────────────────────────────────────────────
+
+┌─ Alex — History & Regression Hypothesis ───────────────────────┐
+│ Root cause   : pendingAlertResolve flag removed in commit abc1234 │
+│                (IV-3601 "cleanup unused flags") — unintentional   │
+│                deletion; commit message does not mention alerts   │
+│ Evidence     : abc1234 — CaseManager.java:2272, flag assignment   │
+│                deleted in that PR's cleanup sweep                 │
+│ Fix direction: Restore the flag assignment before the save call   │
+│ Confidence   : High  |  Ops used: 4 / 8                          │
+│ Unknowns     : None — commit diff is conclusive                   │
+└────────────────────────────────────────────────────────────────────┘
+
+┌─ Sam — Data Flow & Logic Hypothesis ───────────────────────────┐
+│ Root cause   : resolveCase():2272 sets RESOLVED status but        │
+│                pendingAlertResolve is never set true; the async   │
+│                callback ScreenCallBackAlertsForResolve is never   │
+│                reached — alert chain is dead                      │
+│ Evidence     : CaseManager.java:2272 — flag field exists,         │
+│                onSuccess() fires, but flag is false; callback     │
+│                guard `if (pendingAlertResolve)` is never entered  │
+│ Fix direction: Set flag = true before the save onSuccess()        │
+│ Confidence   : High  |  Ops used: 5 / 8                          │
+│ Unknowns     : None — divergence point confirmed                  │
+└───────────────────────────────────────────────────────────────────┘
+
+┌─ Jordan — Defensive Patterns Hypothesis ───────────────────────┐
+│ Root cause   : Boolean Flag Not Reset (#2) — pendingAlertResolve  │
+│                field declared, never set true on the resolve path │
+│ Pattern match: #2 Boolean Flag Not Reset                          │
+│ Evidence     : CaseManager.java:2272 — `this.pendingAlertResolve  │
+│                = false;` only; no `= true` on resolve branch      │
+│ Fix direction: Add `pendingAlertResolve = true;` before save call │
+│ Confidence   : High  |  Ops used: 2 / 8                          │
+│ Unknowns     : None — pattern match unambiguous                   │
+└───────────────────────────────────────────────────────────────────┘
+
+── Morgan's Cross-Examination ─────────────────────────────────────
+→ Alex: "The commit message says 'cleanup unused flags' — how do
+   you know the removal was unintentional rather than a deliberate
+   decision to disable alert resolution?"
+
+Alex: "The linked ticket IV-3601 is about UI cleanup — no mention
+   of alert behaviour. The flag is still referenced by the callback
+   guard 5 lines below. If the intent was to remove alert resolution
+   entirely, the guard and the callback class would also be gone."
+
+→ Sam: "You say the callback guard `if (pendingAlertResolve)` is
+   never entered. Is the callback even registered at the point
+   resolveCase() is called, or does registration also need fixing?"
+
+Sam: "The callback is registered in the constructor — it's always
+   live. The only missing piece is setting the flag to true on the
+   resolve path. The callback itself is wired correctly."
+
+── Team Debate ────────────────────────────────────────────────────
+Jordan challenges Alex: "You're attributing this to a commit removal.
+But if that commit was intentional at the time, restoring the flag
+alone might not be enough — someone might have removed it to fix a
+different bug. Sam's flow trace confirms the mechanism; mine confirms
+the pattern. The history is supporting evidence, not the cause."
+
+Alex responds: "Fair. The root cause is the missing flag on the
+resolve path. The commit confirms when it disappeared. Jordan's
+pattern naming is the cleaner statement. I'll defer to that framing."
+
+Morgan: "Good. Debate closed."
+──────────────────────────────────────────────────────────────────
+
+── Morgan's Verdict ───────────────────────────────────────────────
+Scores:
+  Alex   : 9 / 14 pts — strong historical evidence; correctly
+                         deferred after debate shows good judgment
+  Sam    : 11 / 14 pts — flow trace is thorough and confirms the
+                          exact mechanism; callback registration
+                          question answered well under pressure
+  Jordan : 12 / 14 pts — matched the pattern in 2 ops, evidence is
+                          code-level and unambiguous, survived
+                          Alex's implicit challenge cleanly
+
+My assessment: All three converged on the same location and mechanism.
+Jordan named it fastest with the most precise code evidence. Sam's
+callback registration clarification is important — it confirms the
+fix is a single-line change. Alex's commit adds useful audit trail.
+The adopted root cause is Jordan's with Sam's callback note added.
+
+╔══════════════════════════════════════════════════════════════════╗
+║  🏆  BEST ANALYSIS: Jordan           Score: 12 / 14 pts          ║
+║  Morgan: "Pattern named precisely, evidence in 2 ops, fix        ║
+║           direction immediately actionable. Sam's callback        ║
+║           clarification incorporated into Team Note."            ║
+╚══════════════════════════════════════════════════════════════════╝
+
+ROOT CAUSE STATEMENT
+────────────────────────────────────────────────────────────────────
+Author    : Jordan  |  Approved by: Morgan
+Location  : CaseManager.java:2272
+Mechanism : pendingAlertResolve flag never set true on the resolve
+            path — the callback guard `if (pendingAlertResolve)`
+            is never entered; alert resolution chain is never reached
+Trigger   : User resolves a case via Actions → Change Status → RESOLVED
+Fix dir.  : Set pendingAlertResolve = true before the save onSuccess
+            and wire ScreenCallBackAlertsForResolve
+Confidence: High
+Team note : Callback is already registered in constructor — only the
+            flag assignment is missing. Single-line fix. (Sam)
+────────────────────────────────────────────────────────────────────
+
+## Step 8 — Proposed Fix
+Root cause anchored at CaseManager.java:2272 (Jordan / approved by Morgan)...
+Before/After: ...
+Alternatives considered: 1 (rejected — higher regression risk)
+
+── Morgan's Fix Review ────────────────────────────────────────────
+Mechanism alignment : Confirmed — fix sets the flag Jordan identified
+Surgical scope      : Confirmed — 1 file, 1 line changed
+Regression risk     : Low — flag only affects the resolve code path
+Team note honoured  : Yes — no callback registration change needed
+DB safety           : N/A — no schema change
+
+Morgan's verdict: ✅ APPROVED
+──────────────────────────────────────────────────────────────────
+
+## Step 9 — Impact Analysis
 Risk: Low | Files changed: 2 | Retest: 3 items
 
-## Step 8 — Change Summary
-Files: 2 modified | Commit message ready to paste | PR description ready to paste
+## Step 10 — Change Summary
+Files: 2 modified | Commit message ready to paste | PR description (with root cause + Jordan/Morgan attribution) ready to paste
 
-## Step 9 — (internal step number — see SKILL.md)
-
-## Step 10 — Session Stats
+## Step 11 — Session Stats
 IV-3672 | ~14m elapsed | ~5,100 in / ~2,040 out tokens | est. cost $0.0462 (Sonnet 4.6)
 
-## Step 11 — PDF Report
+## Step 12 — PDF Report
 📄 Analysis Report Generated
    Folder : ~/Documents/DevelopmentTasks/Claude-Analyzed-Tickets/
    File   : ~/Documents/DevelopmentTasks/Claude-Analyzed-Tickets/IV-3672-analysis.pdf
@@ -655,9 +914,14 @@ When `AUTO_MODE=true` is set, all interactive confirmation gates are bypassed an
 | Step 4 — Branch creation | Run `git checkout -b …` | **Skipped** — reports the branch name only; no git commands run |
 | Step 5 — Low file-map confidence | Stop and ask developer | Proceed with `⚠️ LOW CONFIDENCE — manual review required` |
 | Step 6 — Low replication confidence | Stop and ask developer | Proceed with `⚠️ LOW CONFIDENCE — assumptions noted` |
-| Step 7 — Apply fix prompt | Ask yes / no / partial | **Defaults to no** — proposes the fix only; no files are edited |
+| Step 7 — Morgan briefing | Morgan opens and assigns focus | Briefing runs automatically |
+| Step 7 — Mid-point check-in | Engineers report progress to Morgan | All three submit status; Morgan responds automatically |
+| Step 7 — Cross-examination & debate | Morgan questions engineers; one challenge round | Runs automatically; no developer input required |
+| Step 7 — Morgan's verdict | Morgan scores and declares root cause | Verdict runs automatically |
+| Step 8 — Morgan fix review | Morgan vets the proposed fix | Runs automatically; rework loop runs once if needed |
+| Step 8 — Apply fix prompt | Ask yes / no / partial | **Defaults to no** — proposes the fix only; no files are edited |
 
-The full 11-step analysis still runs and the PDF report is saved to disk. The developer reviews the PDF and applies the fix manually.
+The full 12-step analysis still runs and the PDF report is saved to disk. The developer reviews the PDF and applies the fix manually.
 
 ### Files
 
@@ -970,16 +1234,38 @@ claude plugin update prevoir@prevoir
 
 ## Changelog
 
-### v1.1.1
+### v1.2.0
+
+#### Root Cause Analysis — Engineering Panel (Step 7 / SKILL)
 
 | # | Area | Change |
 |---|------|--------|
-| 1 | Skill — Headless Mode | Added `AUTO_MODE=true` support — all interactive gates bypass with safe defaults; branch creation and file edits are skipped; full analysis and PDF report still run |
-| 2 | Automation — `poll-jira.sh` | New cross-platform polling script — queries Jira every 60 minutes for Parked/Blocked tickets; detects OS at runtime and uses `osascript` (macOS), `notify-send` (Linux), or PowerShell balloon tip (Windows WSL) for notifications |
-| 3 | Automation — `com.prevoir.poll-jira.plist` | macOS launchd job — fires every 60 minutes via `StartInterval`; Power Nap compatible; logs stdout and stderr separately |
-| 4 | Automation — `.jira-credentials` | Credentials file (chmod 600) — keeps API token out of the script body |
-| 5 | README — Fix | Removed duplicate Step 9/Step 10 headings in the What It Does section |
-| 6 | README — Automated Polling section | New section documenting headless mode, the polling script, file locations, setup, and cache management |
+| 1 | Step 7 — Engineering Panel | **New dedicated RCA step** — replaced single-angle analysis with a structured 4-person senior engineering panel. Morgan (Lead Developer) chairs; Alex, Sam, and Jordan (Senior Engineers) investigate independently and compete for best analysis. |
+| 2 | Step 7 — Morgan (Lead Developer) | 20-yr Java/GWT/Spring/Oracle expert. Sets the investigation schedule, assigns focus areas, poses probing questions, facilitates one debate round, scores all hypotheses, and gives a binding verdict. Not competing — arbitrates. |
+| 3 | Step 7 — Engineer Personas | Alex (12 yrs): git history & regression forensics — *"Every bug has a birthday."* Sam (10 yrs): runtime data flow & logic tracing — *"Follow the data to the divergence point."* Jordan (15 yrs, architect): defensive patterns & anti-patterns — *"I've catalogued every way Java devs shoot themselves in the foot."* |
+| 4 | Step 7 — Phased 6-minute session | Six sequential phases: Morgan briefing (1 min) → parallel investigation (4 min) → mid-point check-in (T+2) → hypothesis submission (T+4) → cross-examination & debate (T+5–6) → Morgan's verdict (T+6). |
+| 5 | Step 7 — Investigation Budget | Each engineer: 4-minute window / max 8 targeted grep-read operations. Stop-early rule triggers if High confidence evidence is found in ≤ 4 ops. Morgan may run up to 4 additional reads to independently verify contested claims. |
+| 6 | Step 7 — Mid-Point Check-In (T+2) | All three engineers submit a brief progress status to Morgan mid-investigation. Morgan acknowledges, redirects off-track engineers, or calls an early stop if conclusive evidence has already been found. |
+| 7 | Step 7 — Morgan Cross-Examination | After hypothesis submission, Morgan poses 1–2 targeted probing questions per hypothesis to stress-test reasoning. Engineers respond with code evidence, not opinion. |
+| 8 | Step 7 — Team Debate | One round of engineer-to-engineer challenges. Any engineer may challenge another's hypothesis with specific counter-evidence; the challenged engineer responds once. Morgan moderates and closes the debate. |
+| 9 | Step 7 — Competitive Scoring (max 14 pts) | 8 criteria scored by Morgan: code evidence (+3), fix direction (+2), intermittent explanation (+2), calibrated confidence (+1), independent corroboration (+2), found efficiently ≤ 5 ops (+1), survived cross-examination (+2), debate challenge deflected (+1). |
+| 10 | Step 7 — Verdict outcomes | 🏆 Best Analysis (endorsement), 🤝 Consensus (joint credit), 🏆 + 📝 Refinement (Morgan improves the winning hypothesis), or ⚡ Morgan Override (independent read finds what the team missed). |
+| 11 | Step 7 — Root Cause Statement | Authored by the winning engineer, approved by Morgan. Includes a Team Note capturing any debate nuance the fix author must not overlook. |
+| 12 | Step 8 — Morgan Fix Review | Before the fix is applied, Morgan vets it across 5 checks: mechanism alignment, surgical scope, regression risk, team note honoured, DB safety. Verdict: ✅ Approved / ⚠️ Approved with Conditions / 🔄 Rework Required (one rework loop allowed). |
+| 13 | Step 8 — Propose Fix | Root Cause Statement quoted verbatim as mandatory anchor. Each code change annotated with which mechanism it addresses. Alternative approaches table added. |
+| 14 | Step 10 — Change Summary | PR description template updated to include Root Cause Statement with winning engineer attribution and Morgan's approval. |
+| 15 | Steps renumbered | New dedicated RCA step inserted as Step 7 (SKILL). Old Step 7 (Propose Fix) → Step 8. Old Step 8 (Impact) → Step 9. Old Step 9 (Summary) → Step 10. Old Step 10 (Stats) → Step 11. Old Step 11 (PDF) → Step 12. Total: 12 SKILL steps. |
+
+#### Automation & Headless Mode
+
+| # | Area | Change |
+|---|------|--------|
+| 16 | Skill — Headless Mode (`AUTO_MODE=true`) | All interactive gates bypass with safe defaults — branch creation and file edits are skipped; full analysis and PDF report still run |
+| 17 | Headless — Morgan phases | All Morgan phases (briefing, mid-check, cross-examination, debate, verdict, fix review) run automatically with no developer input; rework loop runs once if Morgan returns REWORK REQUIRED |
+| 18 | Automation — `poll-jira.sh` | New cross-platform polling script — queries Jira every 60 minutes for tickets assigned to you with status To Do, Open, Parked, or Blocked; detects OS at runtime and uses `osascript` (macOS), `notify-send` (Linux), or PowerShell balloon tip (Windows WSL) |
+| 19 | Automation — `com.prevoir.poll-jira.plist` | macOS launchd job — fires every 60 minutes via `StartInterval`; Power Nap compatible when plugged in; logs stdout and stderr to separate files |
+| 20 | Automation — `.jira-credentials` | Credentials file (chmod 600, gitignored) — keeps Jira API token and email out of the script body |
+| 21 | README — Automated Polling section | New section documenting headless mode, polling script, file locations, cross-platform setup, and cache management |
 
 ---
 

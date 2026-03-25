@@ -1,7 +1,7 @@
 ---
 name: dev
 description: Prevoir internal developer workflow skill. Use when a developer provides a Jira ticket URL or ticket key (e.g. IV-1234) and wants to start development work. Handles the full workflow from reading the Jira ticket to proposing a code fix — including reading the description, understanding the problem, checking comments, creating a git branch, locating affected code, and proposing a fix with explanation.
-version: 1.1.0
+version: 1.2.0
 ---
 
 # Prevoir Dev Workflow Skill
@@ -29,9 +29,15 @@ If the environment variable `AUTO_MODE=true` is set, the skill runs in **analysi
 | Step 4c — Branch creation | Run `git checkout -b …` | **Skip** — report the branch name that would be created, run no git commands |
 | Step 5 — Low file-map confidence | Stop and ask developer | Proceed with `⚠️ LOW CONFIDENCE — manual review required` |
 | Step 6e — Low replication confidence | Stop and ask developer | Proceed with `⚠️ LOW CONFIDENCE — assumptions noted` |
-| Step 7c — Apply fix prompt | Ask yes / no / partial | **Default to no** — propose the fix only; do not call Edit or modify any files |
+| Step 7b — Morgan briefing | Morgan opens session and briefs team | Morgan briefing runs as normal; no developer input required |
+| Step 7d — Mid-point check-in | Engineers report progress to Morgan | All three engineers submit status; Morgan responds automatically |
+| Step 7f — Morgan cross-examination | Morgan poses questions; engineers respond | Questions and responses generated automatically; no developer input required |
+| Step 7g — Team debate | Open floor for one challenge round | Debate runs automatically; if no challenges, state "No challenges" and proceed |
+| Step 7h — Morgan verdict | Morgan scores and declares adopted root cause | Verdict runs automatically; proceed with highest-scoring hypothesis |
+| Step 8c — Morgan fix review | Morgan vets the proposed fix | Review runs automatically; if REWORK REQUIRED, revise once and re-run; if still failing, proceed with `⚠️ UNRESOLVED — developer review required` |
+| Step 8d — Apply fix prompt | Ask yes / no / partial | **Default to no** — propose the fix only; do not call Edit or modify any files |
 
-In headless mode, Steps 1–9 still run and produce full output. Steps 10 and 11 (session stats + PDF report) run as normal so the PDF is saved to disk.
+In headless mode, Steps 1–10 run and produce full output with all interactive gates bypassed using safe defaults. Steps 11 and 12 (session stats + PDF report) run as normal so the PDF is saved to disk.
 
 ---
 
@@ -167,7 +173,7 @@ If there are no comments, state: "No comments — proceed from description only.
 
 #### Prior Investigation Carry-Forward
 
-If any comments contain previous investigation work (root cause findings, code traces, attempted fixes, identified files, test results, or partial solutions), extract and explicitly carry these forward as **known context** for Steps 5, 6, and 7. Do not re-investigate what has already been established.
+If any comments contain previous investigation work (root cause findings, code traces, attempted fixes, identified files, test results, or partial solutions), extract and explicitly carry these forward as **known context** for Steps 5, 7, and 8. Do not re-investigate what has already been established.
 
 Produce a **Prior Investigation Summary** block if applicable:
 
@@ -180,7 +186,7 @@ Prior Investigation Summary:
 - Remaining unknowns: [what is still unresolved]
 ```
 
-This summary must be referenced in Step 7 (Propose the Fix) — build the solution on top of what is already known rather than starting from scratch.
+This summary must be referenced in Step 7 (Root Cause Analysis) and Step 8 (Propose the Fix) — build the solution on top of what is already known rather than starting from scratch.
 
 ---
 
@@ -279,7 +285,7 @@ Never read an entire source file speculatively. Always follow this sequence:
 2. `Read` only the relevant line range (the method ± ~20 lines of surrounding context)
 3. Only read the full file if the method spans many lines or the grep result is ambiguous
 
-Reading a 40-line method costs ~60 tokens. Reading a 2,000-line Java file costs ~3,000 tokens. Apply this discipline to every file in this step and in Step 7.
+Reading a 40-line method costs ~60 tokens. Reading a 2,000-line Java file costs ~3,000 tokens. Apply this discipline to every file in this step and in Step 8.
 
 Use the ticket **Labels** and **Components** as hints:
 - `CaseManager` → `fcfrontend/.../view/CaseManager.java`
@@ -365,23 +371,454 @@ If the fix touches **multiple layers**, list each service that needs restarting 
 
 ---
 
-### Step 7 — Propose the Fix
+### Step 7 — Root Cause Analysis (Engineering Panel)
 
-Read the identified files and produce:
+A four-person senior engineering team convenes to investigate the issue. **Morgan** (Lead Developer) chairs the session, sets the schedule, and has final authority over the adopted root cause. The three senior engineers investigate independently under a time constraint and compete for the best analysis. After submission, Morgan facilitates a debate round, weighs in with their own assessment, and gives a binding verdict. The team then converges on a single root cause — together.
 
-#### 7a. Root Cause Analysis
-- Explain **why** the bug occurs or **why** the feature is missing
-- Reference specific file paths and line numbers
-- Be precise: "The issue is in `CaseManager.java:2272` — the flag is only set when..."
+Do not guess — verify every claim by reading code at the specific location. The Grep-First rule applies throughout this step.
 
-#### 7b. Proposed Solution
-- Describe the approach before showing code
+---
+
+**The team:**
+
+| Role | Name | Background | Mandate |
+|------|------|-----------|---------|
+| **Lead Developer** | **Morgan** | 20 yrs Java, ex-systems architect, deep GWT/Spring/Oracle | Chairs the session. Sets schedule. Reviews all hypotheses. Debates. Gives final verdict. Approves the Root Cause Statement. |
+| Senior Engineer 1 | Alex | 12 yrs Java/GWT | Code archaeology & regression forensics |
+| Senior Engineer 2 | Sam | 10 yrs full-stack Java, Spring, GWT RPC | Runtime data flow & logic tracing |
+| Senior Engineer 3 | Jordan | 15 yrs Java, systems architect background | Defensive patterns & structural anti-patterns |
+
+Engineers are competing for the **Best Analysis** distinction. Morgan is not competing — Morgan arbitrates. Morgan's verdict is binding and may endorse, refine, or override any engineer's hypothesis.
+
+---
+
+#### 7a. Diagnostic Decision Tree
+
+Before anyone begins investigating, classify the failure mode. This classification drives Morgan's briefing and each engineer's focus:
+
+```
+Issue reported
+    │
+    ├─► BUG (defect — something that worked before or should work now)
+    │       │
+    │       ├─► DATA ISSUE? (wrong value stored / returned)
+    │       │       ├─► Missing null/empty check → Hypothesis: NPE or silent empty result
+    │       │       ├─► Wrong field read or written → Hypothesis: Field mapping error
+    │       │       └─► DB query incorrect → Hypothesis: SQL / ORM misconfiguration
+    │       │
+    │       ├─► UI ISSUE? (screen not rendering, action not triggering)
+    │       │       ├─► Event handler missing or broken → Hypothesis: GWT callback not wired
+    │       │       ├─► Service call fails silently → Hypothesis: RPC error swallowed
+    │       │       └─► State not refreshed after action → Hypothesis: Missing panel reload
+    │       │
+    │       ├─► ASYNC / TIMING ISSUE? (intermittent, race condition)
+    │       │       ├─► Multiple callbacks competing → Hypothesis: Race condition
+    │       │       ├─► Lock / transaction conflict → Hypothesis: Deadlock / dirty read
+    │       │       └─► Worker processing order → Hypothesis: Out-of-order execution
+    │       │
+    │       └─► REGRESSION? (was working, now broken)
+    │               ├─► Check git log on affected files (last 90 days)
+    │               └─► Identify which commit introduced the change
+    │
+    └─► ENHANCEMENT (feature that never existed)
+            ├─► Pure addition → no breakage risk; identify insertion point
+            └─► Modification of existing flow → treat sub-paths as BUG branches above
+```
+
+State: `Decision tree path: {BUG → DATA ISSUE → Missing null check}` (or whichever branch matched).
+
+---
+
+#### 7b. Morgan Opens — Lead Briefing (1-minute block)
+
+Morgan reads the ticket summary, the file map from Step 5, the replication guide from Step 6, and the decision tree classification. Morgan then opens the session:
+
+```
+┌─ Morgan — Lead Briefing ────────────────────────────────────────┐
+│ Ticket     : {TICKET_KEY} — {summary}                            │
+│ Classification: {Decision tree path}                             │
+│ Primary suspect area: {file:line or layer identified in Step 5}  │
+│                                                                  │
+│ Team assignments:                                                │
+│   Alex  → Focus on git history of {primary_file}. Flag anything │
+│            touched in the last 90 days near {method/class}.      │
+│   Sam   → Trace from {entry_point} down. Find the divergence.   │
+│   Jordan → Run your pattern checklist. Decision tree says        │
+│            {classification}, so lead with patterns {X, Y, Z}.   │
+│                                                                  │
+│ Schedule:                                                        │
+│   T+2 min : Mid-point check-in (all three report progress)      │
+│   T+4 min : Final hypotheses due                                 │
+│   T+6 min : Debate round + my verdict                           │
+│                                                                  │
+│ Rules: Evidence only. File:line or commit references required.   │
+│ I'll challenge any claim that isn't backed by code.              │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### 7c. Parallel Investigation — Engineers Investigate (4-minute block)
+
+Each engineer has a **4-minute investigation window**, capped at **8 targeted grep/read operations** before committing to a hypothesis. The budget enforces focus: senior engineers reach defensible conclusions quickly, not exhaustively.
+
+**Budget rules (apply to Alex, Sam, and Jordan):**
+- **High-confidence evidence found in ≤ 4 ops?** Stop immediately and go to mid-point check-in. Do not over-investigate.
+- **No clear hypothesis after 8 ops?** Commit to the best available hypothesis, rate it Medium or Low confidence, and state explicitly what additional information would confirm it.
+- Every claim must be backed by a specific `file:line` or commit reference. Unsupported assertions will be challenged by Morgan.
+- Present findings as if briefing a tech lead: precise, brief, right.
+
+---
+
+**Alex — Code History & Regression**
+*"Every bug has a birthday. Find the commit, find the cause."*
+
+Operations (in priority order — stop early if High confidence is reached):
+1. `git log --oneline -10 -- {primary_file}` for each file in the Step 5 file map
+2. `git log --oneline --since="90 days ago" -- {primary_file}` for broader history
+3. Identify the most recent commit touching the relevant method or class
+4. Inspect the suspect commit: `git show {commit_hash} -- {file}` — read only relevant diff hunks
+5. Check if the issue correlates with a version branch merge or cherry-pick
+6. For enhancement tickets: confirm no partial implementation exists in git history
+7. Cross-reference suspect commit date with related Jira tickets in comments
+8. Confirm fix path is clear of conflicting in-progress changes on the branch
+
+---
+
+**Sam — Data Flow & Runtime Logic**
+*"Follow the data. The divergence point is the bug."*
+
+Operations (in priority order — stop early if High confidence is reached):
+1. Locate the entry point from Step 5 (UI event handler, API endpoint, worker trigger)
+2. Read the entry method (relevant line range — Grep-First applies)
+3. Follow the first significant call in the chain — grep, then read the target method
+4. Continue layer by layer: UI → service → DAO/plugin → DB until divergence is found
+5. At each hop: is correct data present? Is a null check missing? Is a flag propagated?
+6. Identify the exact line where actual state deviates from required state
+7. Verify fix direction: confirm the correct value *would* be available if the divergence is patched
+8. Note secondary effects downstream of the divergence point
+
+Additional Sam checks at every hop:
+- GWT async callback result used outside its callback scope?
+- Method return value silently discarded?
+- Conditional branch short-circuits before the critical operation executes?
+- Service method calling a deprecated path instead of the updated one?
+
+---
+
+**Jordan — Defensive Patterns & Structural Anti-Patterns**
+*"I've catalogued every way Java developers shoot themselves in the foot."*
+
+Jordan checks patterns in priority order driven by the decision tree classification:
+
+| Pri | Pattern | What Jordan checks |
+|-----|---------|-------------------|
+| 1 | **Null Pointer** | Object dereferenced without a prior null guard — especially after a service call or collection lookup |
+| 2 | **Boolean Flag Not Reset** | Flag set in one path but never cleared in the complementary path |
+| 3 | **GWT Async Callback Lost** | Async callback result used outside its own closure scope |
+| 4 | **Silent Exception Swallow** | Catch block empty or logging only — masking the real failure |
+| 5 | **Empty Collection Guard** | List iterated or `.get(0)` called without size/null check |
+| 6 | **Partial Transaction** | DB write immediately depended upon in the next call without flush |
+| 7 | **Missing Method Override** | New overload added to interface/abstract class, not implemented in subclass |
+| 8 | **Wrong Layer Call** | UI code directly accessing DAO or utility, bypassing the service layer |
+| 9 | **DB Dialect Gap** | `ROWNUM` vs `LIMIT`, `NVL` vs `COALESCE`, `SYSDATE` vs `NOW()` etc. |
+| 10 | **Thread Safety** | Shared field read/written from multiple threads without synchronisation |
+
+Priority order by classification: UI issues → {1, 2, 3, 4}; Data issues → {1, 5, 6, 9}; Async issues → {3, 7, 10}; Regressions → {2, 8}.
+
+---
+
+#### 7d. Mid-Point Check-In — T+2 minutes
+
+Each engineer submits a brief progress report to Morgan after approximately 4 operations used. Morgan acknowledges, redirects if needed, or issues a targeted follow-up question.
+
+```
+─── Mid-Point Check-In ────────────────────────────────────────────
+
+Alex (ops used: N/8):
+  Status: [e.g. "Found a suspect commit — diffing now" or "Nothing
+           suspicious yet in history — broadening to 90-day range"]
+
+Sam (ops used: N/8):
+  Status: [e.g. "Traced to service layer — divergence likely in
+           resolveCase(); reading next" or "Entry method is thin —
+           tracing into the callback chain"]
+
+Jordan (ops used: N/8):
+  Status: [e.g. "Pattern #2 matched early — Boolean Flag Not Reset
+           confirmed at CaseManager.java:2272" or "No clear pattern
+           yet — continuing through lower-priority checks"]
+
+─── Morgan's Response ─────────────────────────────────────────────
+
+[Morgan reads the three statuses and responds with one of:]
+
+  ✓ On track — continue as assigned.
+
+  ↻ Redirect: [e.g. "Alex, the commit you're looking at is from
+    a different branch — check the merge commit instead." or
+    "Sam, skip the DAO layer for now — the UI handler is more
+    likely; go back and read resolveCase() directly."]
+
+  ⚡ Early call: [e.g. "Jordan, if you've confirmed that pattern
+    at line 2272 with code evidence, stop — that's enough. Write
+    your hypothesis now and let the others finish."]
+────────────────────────────────────────────────────────────────────
+```
+
+---
+
+#### 7e. Hypothesis Submission — T+4 minutes
+
+All three engineers submit their final hypotheses. Each hypothesis must fit the template exactly — no unsupported claims.
+
+```
+┌─ Alex — History & Regression Hypothesis ───────────────────────┐
+│ Root cause   : [precise statement — what Alex believes]          │
+│ Evidence     : [commit hash + file:line, or "no suspect commit — │
+│                bug was always present since {first commit}"]     │
+│ Fix direction: [how the history finding informs the fix]         │
+│ Confidence   : High / Medium / Low                               │
+│ Ops used     : [N / 8]                                           │
+│ Unknowns     : [what git history alone cannot confirm]           │
+└────────────────────────────────────────────────────────────────────┘
+
+┌─ Sam — Data Flow & Logic Hypothesis ───────────────────────────┐
+│ Root cause   : [precise divergence point — what code does vs.    │
+│                what it must do]                                   │
+│ Evidence     : [file:line — code snippet showing the divergence] │
+│ Fix direction: [what change at the divergence point resolves it] │
+│ Confidence   : High / Medium / Low                               │
+│ Ops used     : [N / 8]                                           │
+│ Unknowns     : [what flow tracing alone cannot confirm]          │
+└───────────────────────────────────────────────────────────────────┘
+
+┌─ Jordan — Defensive Patterns Hypothesis ───────────────────────┐
+│ Root cause   : [precise statement — what Jordan believes]        │
+│ Pattern match: [which pattern(s) from the table matched]         │
+│ Evidence     : [file:line + one-line quote of offending code]    │
+│ Fix direction: [how eliminating the pattern resolves the issue]  │
+│ Confidence   : High / Medium / Low                               │
+│ Ops used     : [N / 8]                                           │
+│ Unknowns     : [what pattern analysis alone cannot confirm]      │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### 7f. Morgan's Review & Cross-Examination — T+5 minutes
+
+Morgan reads all three hypotheses carefully, then poses **1–2 targeted probing questions** to specific engineers to stress-test their reasoning. Engineers respond in one paragraph — direct, evidence-backed.
+
+```
+─── Morgan's Questions ────────────────────────────────────────────
+
+[Morgan selects the most important uncertainties across the three
+hypotheses and asks them directly. Examples:]
+
+  → To Alex: "You say commit abc1234 is responsible. What was the
+    stated reason for that change? Was it deliberate removal or
+    accidental? Does the commit message or linked ticket clarify?"
+
+  → To Sam: "You found the divergence at resolveCase():2272. Does
+    the flag actually exist in scope at that point, or does the fix
+    require introducing a new field entirely?"
+
+  → To Jordan: "You matched Boolean Flag Not Reset. Does the flag
+    get reset anywhere else in the class — e.g. on cancel or on
+    error? Or is this the only path that should set it?"
+
+─── Engineers Respond ─────────────────────────────────────────────
+
+Alex responds: [direct answer — one paragraph, backed by evidence]
+
+Sam responds: [direct answer — one paragraph, backed by evidence]
+
+Jordan responds: [direct answer — one paragraph, backed by evidence]
+────────────────────────────────────────────────────────────────────
+```
+
+Morgan uses up to **4 additional targeted reads** (beyond the engineers' budgets) to independently verify any claim that cannot be confirmed from the responses alone.
+
+---
+
+#### 7g. Team Debate — One Round
+
+Morgan opens the floor for one round of cross-challenge. Any engineer may challenge one other engineer's hypothesis with specific counter-evidence. The challenged engineer responds once. Morgan moderates.
+
+```
+─── Debate Round ──────────────────────────────────────────────────
+
+[Each challenge must cite specific evidence. Format:]
+
+  {Engineer A} challenges {Engineer B}:
+  "Your hypothesis says X, but I found Y at {file:line} which
+  contradicts that because Z. My reading suggests [alternative]."
+
+  {Engineer B} responds:
+  "That's a fair point. [Agree / Disagree because {evidence}].
+  My hypothesis [stands / needs refinement: {updated claim}]."
+
+  [Morgan may accept or reject refinements — one sentence each.]
+
+─── Morgan closes debate ──────────────────────────────────────────
+  "We have enough. Let me give my assessment."
+────────────────────────────────────────────────────────────────────
+```
+
+If no engineer mounts a challenge, state: "No challenges — all engineers accept each other's findings."
+
+---
+
+#### 7h. Morgan's Verdict — T+6 minutes
+
+Morgan weighs all evidence — original hypotheses, responses to questions, and the debate — then delivers a binding verdict. Morgan scores each hypothesis and declares the adopted root cause.
+
+**Scoring rubric** (Morgan applies this to each hypothesis):
+
+| Criterion | Points |
+|-----------|--------|
+| Specific `file:line` cited with code evidence | +3 |
+| Fix direction is clear and immediately actionable | +2 |
+| Explains *why* the bug is intermittent (if applicable) | +2 |
+| Self-rated High confidence and evidence supports it | +1 |
+| Corroborated by another engineer's independent finding | +2 |
+| Found efficiently (≤ 5 ops used) | +1 |
+| Survived cross-examination without needing revision | +2 |
+| Debate challenge successfully deflected with evidence | +1 |
+
+Maximum score: 14 pts. Morgan applies the rubric, declares the highest scorer the winner, and then issues a personal assessment.
+
+```
+─── Morgan's Verdict ──────────────────────────────────────────────
+
+Scores:
+  Alex   : {N} / 14 pts — [one-line assessment]
+  Sam    : {N} / 14 pts — [one-line assessment]
+  Jordan : {N} / 14 pts — [one-line assessment]
+
+My assessment:
+  [Morgan weighs in personally — 2–4 sentences. Morgan may:
+   (a) Endorse the highest-scoring hypothesis unchanged
+   (b) Refine it: "Jordan's hypothesis is correct but incomplete —
+       Sam's flow trace shows the flag is also missing on the
+       cancel path, which explains the intermittent reports."
+   (c) Override all three: "None of you went deep enough. I ran
+       one more read on {file} and found {what Morgan found}."
+   Morgan's assessment takes precedence over the score alone.]
+
+Adopted root cause: [the hypothesis Morgan endorses, possibly
+                     refined or Morgan's own if override]
+────────────────────────────────────────────────────────────────────
+```
+
+**Verdict outcomes:**
+
+| Outcome | Block displayed |
+|---------|----------------|
+| One engineer's score is clearly highest + Morgan agrees | `🏆 BEST ANALYSIS: {Name}` |
+| Two or more engineers independently reached the same cause | `🤝 CONSENSUS: {Name} & {Name}` |
+| Morgan refined the winning hypothesis | `🏆 BEST ANALYSIS: {Name}` + `📝 Refined by Morgan` note |
+| Morgan overrode all three | `⚡ MORGAN OVERRIDE — independent read required` |
+
+```
+╔══════════════════════════════════════════════════════════════════╗
+║  🏆  BEST ANALYSIS: {Engineer Name}        Score: {N} / 14 pts  ║
+║  Reason: {One sentence — why this analysis was superior}         ║
+║  Morgan: "{One sentence endorsement or refinement note}"         ║
+╚══════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+#### 7i. Root Cause Statement — Team Sign-Off
+
+Produce the final root cause statement — authored by the winning engineer and approved by Morgan. This anchors Step 8.
+
+```
+ROOT CAUSE STATEMENT
+────────────────────────────────────────────────────────────────────
+Author    : {Winning Engineer Name}  |  Approved by: Morgan
+Location  : {file:line}
+Mechanism : [How the bug manifests — precise, code-level description]
+Trigger   : [What user action or system event makes it observable]
+Fix dir.  : [One sentence on the correct fix — detail in Step 8]
+Confidence: High / Medium / Low
+Team note : [Optional — one sentence capturing any nuance raised in
+             the debate that the fix author must not overlook]
+────────────────────────────────────────────────────────────────────
+```
+
+If overall confidence is **Low** after Morgan's verdict (no clear root cause even after debate), **stop and present the competing hypotheses to the developer**. In headless mode, proceed with the highest-scoring hypothesis and flag the ambiguity explicitly.
+
+---
+
+### Step 8 — Propose the Fix
+
+Using the Root Cause Statement from Step 7 (authored by the winning engineer, approved by Morgan) as the mandatory anchor, read the identified files and produce the fix. Every proposed change must directly address the mechanism identified in Step 7i.
+
+#### 8a. Proposed Solution
+- Open by quoting the Root Cause Statement (file:line and mechanism) — do not paraphrase it
+- Describe the approach in plain language before showing any code
 - Show **only the code that needs to change** (diff-style or clear before/after blocks)
-- Explain each change and why it's needed
+- Annotate each change with: *"This addresses the [mechanism] identified by [author] in Step 7"*
+- If the Step 7 Team Note flagged a nuance, confirm it is handled by the proposed fix
 
-#### 7c. Apply Fix to Feature Branch (Interactive)
+#### 8b. Alternative Approaches Considered
 
-After presenting the proposed solution, ask the developer:
+For each alternative considered and rejected, provide a brief entry:
+
+| Alternative | Why rejected |
+|-------------|-------------|
+| {approach} | {reason — e.g. higher risk, side effects, does not address root cause mechanism} |
+
+If only one viable approach exists, state: "No viable alternatives identified — single fix path confirmed."
+
+#### 8c. Morgan Reviews the Proposed Fix
+
+Before applying anything, Morgan vetted the proposed fix against the adopted root cause. Morgan checks:
+
+1. **Mechanism alignment** — does the fix directly address the mechanism stated in the Root Cause Statement?
+2. **Surgical scope** — is the fix minimal? Does it avoid touching code unrelated to the root cause?
+3. **Regression risk** — does the fix introduce any new null risks, flag side effects, or break the complementary code path?
+4. **Team note honoured** — if a nuance was flagged in Step 7i, is it handled?
+5. **DB safety** — if a schema change is included, is it safe on both Oracle and PostgreSQL?
+
+```
+─── Morgan's Fix Review ───────────────────────────────────────────
+
+Mechanism alignment : [Confirmed / Issue: {what is misaligned}]
+Surgical scope      : [Confirmed — N files, M lines changed /
+                       Concern: {what is unnecessarily wide}]
+Regression risk     : [Low — no new risks introduced /
+                       Flag: {specific risk Morgan identified}]
+Team note honoured  : [Yes / Not applicable / No — {what is missing}]
+DB safety           : [Confirmed / N/A — no schema change /
+                       Issue: {dialect problem spotted}]
+
+Morgan's verdict:
+  ✅ APPROVED — fix is correct, surgical, and safe to apply.
+
+  — or —
+
+  ⚠️  APPROVED WITH CONDITIONS — apply after addressing:
+     [{specific condition Morgan requires before applying}]
+
+  — or —
+
+  🔄 REWORK REQUIRED — [{reason}]. Suggested direction:
+     [{Morgan's suggested fix approach — one paragraph}]
+────────────────────────────────────────────────────────────────────
+```
+
+**If Morgan returns REWORK REQUIRED:**
+- Revise the proposed solution in 8a to address Morgan's direction
+- Re-run Morgan's review (8c) against the revised fix
+- Do not proceed to 8d until Morgan's verdict is Approved or Approved with Conditions
+
+#### 8d. Apply Fix to Feature Branch (Interactive)
+
+After Morgan approves the fix, ask the developer:
 
 > **Would you like me to apply these changes to the feature branch now?**
 > - `yes` — apply all proposed changes directly to the files on the current feature branch
@@ -391,11 +828,11 @@ After presenting the proposed solution, ask the developer:
 If the developer answers **yes** or **partial**:
 - Use the Edit tool to apply changes to each identified file
 - After each file is modified, confirm: "Applied change to `{file}:{line}`"
-- Do NOT commit — leave the changes staged for the developer to review and commit using the suggested message from Step 9c
+- Do NOT commit — leave the changes staged for the developer to review and commit using the suggested message from Step 10c
 
-If the developer answers **no**, continue to Step 8 without modifying any files.
+If the developer answers **no**, continue to Step 9 without modifying any files.
 
-#### 7d. DB Migration (if needed)
+#### 8e. DB Migration (if needed)
 If the fix requires schema changes, provide the upgrade script template:
 ```sql
 -- v1.XX.XXX.sql / .pg
@@ -405,11 +842,11 @@ ALTER TABLE ...
 
 ---
 
-### Step 8 — Impact Analysis
+### Step 9 — Impact Analysis
 
 Assess the full consequences of the proposed fix across the entire application. This step requires active codebase searching — do not rely on assumptions. Use Grep to find every reference to changed symbols before drawing conclusions.
 
-#### 8a. Files Changed
+#### 9a. Files Changed
 List every file touched by the fix with a one-line description of what changed and why:
 
 | File | Change | Reason |
@@ -417,7 +854,7 @@ List every file touched by the fix with a one-line description of what changed a
 | `fcfrontend/.../CaseManager.java` | Added `pendingAlertResolve` flag and async callback chain | Core fix for alert resolution |
 | `fcbuild/scripts/upgrades/v1.XX.XXX.sql` | New table / column | Schema required for fix |
 
-#### 8b. Usage Reference Search (mandatory)
+#### 9b. Usage Reference Search (mandatory)
 
 For **every method, class, field, or API endpoint** modified by the fix, search the full codebase for all callers and references:
 
@@ -439,7 +876,7 @@ Rules:
 - If a DB column or table is changed — grep for all SQL references and ORM mappings to that table/column
 - If a GWT RPC service method signature changes — find all client call sites and the corresponding server-side implementation
 
-#### 8c. Application-Wide Impact
+#### 9c. Application-Wide Impact
 
 Based on the usage reference search, describe the impact across each application layer:
 
@@ -453,25 +890,25 @@ Based on the usage reference search, describe the impact across each application
 
 If a layer is not affected, state "None — confirmed by grep (0 references found)."
 
-#### 8d. Regression Risks
+#### 9d. Regression Risks
 For each change, identify what existing behaviour could break:
 - Which existing flows pass through the modified code?
 - Could the DB change affect existing data or other screens that read the same table?
 - Flag any race conditions, null pointer risks, or async timing concerns introduced
-- Flag any callers found in 8b that may behave differently after the change
+- Flag any callers found in 9b that may behave differently after the change
 
-#### 8e. Affected Clients / Environments
+#### 9e. Affected Clients / Environments
 State whether the fix is:
 - **Generic** — affects all clients running this version
 - **Client-specific** — only affects a named client (e.g. FNB, VCL, DRC) due to config or data differences
 - **DB-specific** — behaviour differs between Oracle and PostgreSQL implementations
 
-#### 8f. Related Areas to Retest
-List screens, flows, or features outside the primary fix that should be smoke-tested — derived from the callers found in 8b:
+#### 9f. Related Areas to Retest
+List screens, flows, or features outside the primary fix that should be smoke-tested — derived from the callers found in 9b:
 - e.g. "Alert Central resolve button should still work independently"
 - e.g. "Case Details tab resolve should behave the same as All Cases tab"
 
-#### 8g. Risk Level
+#### 9g. Risk Level
 
 Rate the overall risk of the change based on the usage reference search results:
 
@@ -487,11 +924,11 @@ State the rating prominently:
 
 ---
 
-### Step 9 — Change Summary
+### Step 10 — Change Summary
 
 Produce a concise, developer-friendly summary of everything that was done. This serves as a reference for commit messages, PR descriptions, and handover notes.
 
-#### 9a. Files Touched
+#### 10a. Files Touched
 
 List every file modified, created, or deleted by the fix:
 
@@ -500,14 +937,14 @@ List every file modified, created, or deleted by the fix:
 | `fcfrontend/.../CaseManager.java` | Modified | Added alert resolution chain triggered on case resolve |
 | `fcbuild/scripts/upgrades/v1.XX.XXX.sql` | Created | Added new table `B_TR_TASK_RESPONSES` |
 
-#### 9b. What Was Changed and Why
+#### 10b. What Was Changed and Why
 
 For each file, one short paragraph explaining:
 - What was changed (the what)
 - Why it was necessary to make this change (the why)
 - Any notable decisions or trade-offs made
 
-#### 9c. Suggested Commit Message
+#### 10c. Suggested Commit Message
 
 Provide a ready-to-use commit message following the project convention:
 
@@ -527,7 +964,7 @@ IV3672_Resolving_Cases_should_Resolve_Alerts_1.26.064 IV3672 Mustakeem Lee
 - Added ScreenCallBackResolveAlerts to finalise resolution via resolveAlertCentral
 ```
 
-#### 9d. PR Description Template
+#### 10d. PR Description Template
 
 Provide a ready-to-paste pull request description:
 
@@ -537,21 +974,24 @@ Provide a ready-to-paste pull request description:
 **Jira:** https://prevoirsolutions.atlassian.net/browse/{TICKET_KEY}
 **Branch:** {feature branch name}
 **Base:** {base branch}
-**Risk:** {Low / Medium / High} — {one-line justification from Step 8g}
+**Risk:** {Low / Medium / High} — {one-line justification from Step 9g}
 
 ---
+
+## Root Cause
+{Root Cause Statement from Step 7d — location, mechanism, trigger}
 
 ## What changed
 {One paragraph describing the fix — the what and the why}
 
 ## Files changed
-{Files touched table from Step 9a — abbreviated to file name and one-line summary}
+{Files touched table from Step 10a — abbreviated to file name and one-line summary}
 
 ## How to test
 {Reproduction steps from Step 6b, rewritten as a verification checklist}
 
 ## Retest areas
-{Retest checklist from Step 8f}
+{Retest checklist from Step 9f}
 
 ## DB migration required
 {Yes — run v1.XX.XXX.sql/.pg before deploying | No}
@@ -559,7 +999,7 @@ Provide a ready-to-paste pull request description:
 
 ---
 
-### Step 10 — Session Stats
+### Step 11 — Session Stats
 
 Print a single summary line covering elapsed time, estimated token usage, and estimated cost at current Sonnet 4.6 pricing:
 
@@ -567,7 +1007,7 @@ Print a single summary line covering elapsed time, estimated token usage, and es
 {TICKET_KEY} | ~{N}m elapsed | ~{X} in / ~{Y} out tokens | est. cost ${Z} (Sonnet 4.6)
 ```
 
-Pricing reference (Sonnet 4.6 as of skill version 1.1.0):
+Pricing reference (Sonnet 4.6 as of skill version 1.2.0):
 - Input: $3.00 / 1M tokens
 - Output: $15.00 / 1M tokens
 
@@ -580,11 +1020,11 @@ IV-3672 | ~14m elapsed | ~5,100 in / ~2,040 out tokens | est. cost $0.0462 (Sonn
 
 ---
 
-### Step 11 — Generate PDF Analysis Report
+### Step 12 — Generate PDF Analysis Report
 
-After Step 9 is complete, generate a full PDF report of the analysis and save it to disk.
+After Step 10 is complete, generate a full PDF report of the analysis and save it to disk.
 
-#### 11a. Configuration
+#### 12a. Configuration
 
 Resolve the output folder using this priority order:
 
@@ -596,7 +1036,7 @@ REPORT_DIR="${CLAUDE_REPORT_DIR:-$HOME/Documents/DevelopmentTasks/Claude-Analyze
 mkdir -p "$REPORT_DIR"
 ```
 
-#### 11b. Generate Markdown Source
+#### 12b. Generate Markdown Source
 
 Write a temporary Markdown file at `/tmp/{TICKET_KEY}-analysis.md` containing the full analysis from all steps:
 
@@ -605,7 +1045,7 @@ Write a temporary Markdown file at `/tmp/{TICKET_KEY}-analysis.md` containing th
 
 **Date:** {today's date}
 **Branch:** {feature branch name}
-**Analyst:** Claude (Prevoir Dev Skill v1.1.0)
+**Analyst:** Claude (Prevoir Dev Skill v1.2.0)
 
 ---
 
@@ -627,20 +1067,23 @@ Write a temporary Markdown file at `/tmp/{TICKET_KEY}-analysis.md` containing th
 ## Step 6 — Replication Guide
 {content}
 
-## Step 7 — Proposed Fix
+## Step 7 — Root Cause Analysis
 {content}
 
-## Step 8 — Impact Analysis
+## Step 8 — Proposed Fix
 {content}
 
-## Step 9 — Change Summary
+## Step 9 — Impact Analysis
 {content}
 
-## Step 10 — Session Stats
+## Step 10 — Change Summary
+{content}
+
+## Step 11 — Session Stats
 {content}
 ```
 
-#### 11c. Convert to PDF
+#### 12c. Convert to PDF
 
 Try each method in order, stopping at the first that succeeds. These methods work reliably on macOS, Linux, and Windows without platform-specific library dependencies.
 
@@ -736,7 +1179,7 @@ cp /tmp/{TICKET_KEY}-analysis.html "{REPORT_DIR}/{TICKET_KEY}-analysis.html"
 Inform the developer:
 > "PDF generation unavailable (pandoc and Chrome not found). Report saved as HTML instead. Open in any browser and use File → Print → Save as PDF to convert manually."
 
-#### 11d. Archive and Confirm
+#### 12d. Archive and Confirm
 
 After saving, display the following to the developer (always show both the folder and the full file path):
 
@@ -747,7 +1190,7 @@ After saving, display the following to the developer (always show both the folde
    Format : PDF  ← (or "HTML (PDF libraries unavailable)" if Method 3 was used)
 ```
 
-#### 11e. Temp File Cleanup
+#### 12e. Temp File Cleanup
 
 After the report is confirmed saved, remove the intermediate temp files:
 
@@ -759,7 +1202,7 @@ If removal fails, note it but do not treat it as a blocking error.
 
 Then end with:
 
-> **Ready to code.** Branch is created. Start with `{primary file}:{line number}`. Refer to Step 9 for the change summary and suggested commit message when done.
+> **Ready to code.** Branch is created. Start with `{primary file}:{line number}`. Refer to Step 10 for the change summary and suggested commit message when done.
 
 ---
 
@@ -767,7 +1210,7 @@ Then end with:
 
 ## Output Format
 
-Present output in clearly labelled sections matching the 11 steps above. Use markdown headings. Keep each section concise but complete. Step 11 produces the final confirmation message and report path — that replaces the closing "Ready to code" statement.
+Present output in clearly labelled sections matching the 12 steps above. Use markdown headings. Keep each section concise but complete. Step 12 produces the final confirmation message and report path — that replaces the closing "Ready to code" statement.
 
 ---
 

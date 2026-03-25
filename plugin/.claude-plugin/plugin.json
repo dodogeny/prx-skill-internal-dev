@@ -1,7 +1,7 @@
 {
   "name": "prevoir",
   "description": "Internal Prevoir developer toolkit for V1 development workflow",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": {
     "name": "Prevoir",
     "email": "dev@prevoir.mu"

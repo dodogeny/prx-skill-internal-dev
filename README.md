@@ -408,7 +408,7 @@ In addition to manual invocation, the skill supports a fully automated mode that
 
 ### How it works
 
-A shell script (`poll-jira.sh`) runs daily at 10:00 AM via macOS `launchd`. It:
+A shell script (`poll-jira.sh`) runs **every 60 minutes** via macOS `launchd`. It:
 
 1. Queries Jira for tickets assigned to you with status **Parked** or **Blocked**
 2. Compares against a local seen-tickets cache — skips anything already processed
@@ -439,7 +439,7 @@ The full 11-step analysis still runs and the PDF report is saved to disk. The de
 | `.jira-credentials` | `~/Documents/Prevoir/Scripts/` | API credentials (chmod 600 — owner only) |
 | `.jira-seen-tickets` | `~/Documents/Prevoir/Scripts/` | Cache of already-processed ticket keys |
 | `poll-jira.log` | `~/Documents/Prevoir/Scripts/` | Full run log with timestamps |
-| `com.prevoir.poll-jira.plist` | `~/Library/LaunchAgents/` | macOS launchd schedule definition |
+| `com.prevoir.poll-jira.plist` | `~/Library/LaunchAgents/` | macOS launchd job — fires every 60 minutes, Power Nap compatible |
 
 ### One-time setup
 

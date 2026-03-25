@@ -1,7 +1,7 @@
 ---
 name: dev
 description: Prevoir internal developer workflow skill. Use when a developer provides a Jira ticket URL or ticket key (e.g. IV-1234) and wants to start development work. Handles the full workflow from reading the Jira ticket to proposing a code fix — including reading the description, understanding the problem, checking comments, creating a git branch, locating affected code, and proposing a fix with explanation.
-version: 1.0.0
+version: 1.1.0
 ---
 
 # Prevoir Dev Workflow Skill
@@ -35,7 +35,13 @@ Execute all steps **in order**. Do not skip steps. Present output to the develop
 
 ### Step 1 — Read the Jira Ticket
 
-Use `mcp__jira__get_issue` with the ticket key extracted from the input.
+Use `mcp__jira__get_issue` with the ticket key extracted from the input. Request only the fields needed: `summary`, `issuetype`, `priority`, `status`, `assignee`, `reporter`, `labels`, `components`, `fixVersions`, `versions`, `description`, `comment`, `attachment`. Do not fetch sprint metadata, change logs, epic links, or watcher lists.
+
+**If the MCP call fails** (authentication error, ticket not found, MCP server not running):
+- State the exact error returned
+- Do not proceed to Step 2
+- Instruct the developer to verify: (1) the Atlassian MCP is running, (2) the API token is valid, (3) the ticket key is correct
+- Stop here until the developer confirms the issue is resolved
 
 Display:
 - **Summary** (ticket title)
@@ -115,6 +121,19 @@ If attachments are present but none are qualifying types, state: "Attachments pr
 
 Carry all findings forward into the **Prior Investigation Summary** in Step 3 and the **Root Cause Analysis** in Step 7.
 
+#### Issue Diagram (optional)
+
+For issues involving a **non-obvious data flow or multi-step component interaction** (e.g. a race condition, a cross-layer call chain, a plugin → backend → DB path), generate a draw.io XML diagram and save it to `/tmp/{TICKET_KEY}-diagram.drawio`.
+
+The diagram should show:
+- The **happy path** (what should happen) as a green flow
+- The **broken path** (what actually happens) as a red flow
+- Key method calls and data values annotated at each transition point
+
+State: `Diagram saved to /tmp/{TICKET_KEY}-diagram.drawio`
+
+**Skip this diagram automatically for** trivial single-file bugs, simple null checks, or straightforward field additions where the flow is self-evident from the code. State: `Diagram skipped — single-file change, flow is self-evident.`
+
 ---
 
 ### Step 3 — Read Comments for Additional Context
@@ -154,17 +173,31 @@ This summary must be referenced in Step 7 (Propose the Fix) — build the soluti
 
 Use the following priority order to determine the base branch:
 
-1. Check **Fix Versions** first — if set, use it
-2. If **Fix Versions** is empty, check **Affected Versions** — if set, use it
-3. If both are empty, use `development`
+1. **Fix Versions is set** → derive the version string (e.g. `1.24.292` from `1.24.292.p1`), then check whether a release feature branch exists:
+   ```bash
+   git branch --list "Feature/Release_{VERSION}" && git branch -r | grep "Feature/Release_{VERSION}"
+   ```
+   - If `Feature/Release_{VERSION}` exists (locally or remotely) → fork from it, so the fix builds on top of any release-level work already in progress
+   - If not found → fork from the plain version branch (e.g. `1.24.292`)
+2. **Fix Versions is empty, Affected Versions is set** → fork from the plain version branch (e.g. `1.24.292`)
+3. **Both are empty** → fork from `development`
 
-| Version value          | Base branch to use |
-|------------------------|-------------------|
-| Not set / empty        | `development`     |
-| e.g. `1.24.292.p1`    | `1.24.292`        |
-| e.g. `1.24.292`        | `1.24.292`        |
+| Version value          | Feature/Release branch found? | Base branch to use              |
+|------------------------|------------------------------|---------------------------------|
+| Not set / empty        | —                            | `development`                   |
+| e.g. `1.24.292.p1`    | Yes (`Feature/Release_1.24.292`) | `Feature/Release_1.24.292`  |
+| e.g. `1.24.292.p1`    | No                           | `1.24.292`                      |
+| e.g. `1.24.292`        | Yes                          | `Feature/Release_1.24.292`      |
+| e.g. `1.24.292`        | No                           | `1.24.292`                      |
 
-Rule: Strip any suffix after the third version segment (e.g. `.p1`, `.hotfix`) — always use the base `major.minor.patch` format as the branch name.
+Rule: Strip any suffix after the third version segment (e.g. `.p1`, `.hotfix`) — always use the base `major.minor.patch` format as the version string.
+
+**Base branch confirmation gate:** Before running any `git checkout` or `git checkout -b` command, verify the chosen base branch exists either locally or on the remote:
+```bash
+git branch --list {BASE_BRANCH}
+git branch -r | grep "origin/{BASE_BRANCH}"
+```
+If it cannot be confirmed in either location, **stop and ask the developer** which branch to use rather than silently forking from a stale or incorrect HEAD.
 
 State clearly which base branch will be used and why before running any git command.
 
@@ -221,6 +254,16 @@ Based on the ticket description, comments, and labels, search the codebase at `{
 3. **Data flow** — trace the relevant path through the layers (Frontend → API → DataSource → DB, or Worker → Plugin → etc.)
 4. **Related files** — any model, DTO, or DB script changes that will likely be needed
 
+#### Grep-First, Read-Second Rule (mandatory)
+
+Never read an entire source file speculatively. Always follow this sequence:
+
+1. `Grep` for the relevant class name, method name, or keyword → get the exact file path and line number
+2. `Read` only the relevant line range (the method ± ~20 lines of surrounding context)
+3. Only read the full file if the method spans many lines or the grep result is ambiguous
+
+Reading a 40-line method costs ~60 tokens. Reading a 2,000-line Java file costs ~3,000 tokens. Apply this discipline to every file in this step and in Step 7.
+
 Use the ticket **Labels** and **Components** as hints:
 - `CaseManager` → `fcfrontend/.../view/CaseManager.java`
 - `AlertCentral` → `fcfrontend/.../view/AlertCentral.java` and backend alert APIs
@@ -228,7 +271,26 @@ Use the ticket **Labels** and **Components** as hints:
 - `Plugin`/`Worker` → `fcplugin/src/main/java/com/fc/plugin/`
 - DB changes → `fcbuild/scripts/upgrades/`
 
-Present a **file map** — list each file with its role.
+Present a **file map** — list each file with its role, the specific method or line range identified, and recent git history for primary files:
+
+| File | Role | Key Location | Recent Git History |
+|------|------|-------------|-------------------|
+| `fcfrontend/.../CaseManager.java` | Primary fix target | `resolveCase():2272` | Last modified: 3 days ago by Javed — "IV-3641 fix alert sync" |
+
+To populate the Recent Git History column, run:
+```bash
+git log --oneline -3 -- {file_path}
+```
+
+#### Confidence Gate
+
+After building the file map, assess your certainty:
+
+- **High** — the relevant class, method, and line number are confirmed via grep → proceed automatically
+- **Medium** — file identified but exact method is ambiguous; note the assumption and proceed, flagging it clearly
+- **Low** — cannot locate the relevant code with reasonable certainty → **stop and ask the developer** for guidance before continuing to Step 6
+
+State the confidence level explicitly: `File map confidence: High — proceeding.`
 
 ---
 
@@ -262,11 +324,27 @@ State clearly what **actually** happens — the symptom the reporter sees.
 
 #### 6e. Replication Confidence
 Rate how confidently this replication guide reflects the issue:
-- **High** — reproduction steps are fully derived from ticket + code analysis
-- **Medium** — some assumptions made; developer should verify one step
-- **Low** — limited information in ticket; developer must investigate further before confirming steps
+- **High** — reproduction steps are fully derived from ticket + code analysis → proceed automatically
+- **Medium** — some assumptions made; note the assumption, proceed, and flag it clearly
+- **Low** — limited information in ticket → **stop and ask the developer** to clarify before continuing to Step 7
 
 If confidence is Medium or Low, list the specific unknowns or assumptions made.
+
+#### 6f. Service Restart Guidance
+
+If the fix touches the **Plugin or Worker layer** (`fcplugin/`), state which spawner or service must be restarted locally to pick up the change:
+
+```
+To test this fix locally, restart:
+  - [Spawner/Worker name] — e.g. "CaseResolutionWorker" or "AlertScannerWorker"
+  - Any dependent service that loads the plugin at startup
+```
+
+If the fix touches only the **GWT Frontend** (`fcfrontend/`), state: `Frontend-only change — recompile GWT module; no backend restart required.`
+
+If the fix touches only the **Backend API** (`fcbackend/`), state: `Backend-only change — restart the application server (Tomcat/embedded).`
+
+If the fix touches **multiple layers**, list each service that needs restarting in the correct order.
 
 ---
 
@@ -432,13 +510,64 @@ IV3672_Resolving_Cases_should_Resolve_Alerts_1.26.064 IV3672 Mustakeem Lee
 - Added ScreenCallBackResolveAlerts to finalise resolution via resolveAlertCentral
 ```
 
+#### 9d. PR Description Template
+
+Provide a ready-to-paste pull request description:
+
+```
+## {TICKET_KEY} — {Ticket Summary}
+
+**Jira:** https://prevoirsolutions.atlassian.net/browse/{TICKET_KEY}
+**Branch:** {feature branch name}
+**Base:** {base branch}
+**Risk:** {Low / Medium / High} — {one-line justification from Step 8g}
+
 ---
 
-### Step 10 — Generate PDF Analysis Report
+## What changed
+{One paragraph describing the fix — the what and the why}
+
+## Files changed
+{Files touched table from Step 9a — abbreviated to file name and one-line summary}
+
+## How to test
+{Reproduction steps from Step 6b, rewritten as a verification checklist}
+
+## Retest areas
+{Retest checklist from Step 8f}
+
+## DB migration required
+{Yes — run v1.XX.XXX.sql/.pg before deploying | No}
+```
+
+---
+
+### Step 10 — Session Stats
+
+Print a single summary line covering elapsed time, estimated token usage, and estimated cost at current Sonnet 4.6 pricing:
+
+```
+{TICKET_KEY} | ~{N}m elapsed | ~{X} in / ~{Y} out tokens | est. cost ${Z} (Sonnet 4.6)
+```
+
+Pricing reference (Sonnet 4.6 as of skill version 1.1.0):
+- Input: $3.00 / 1M tokens
+- Output: $15.00 / 1M tokens
+
+Estimate token counts from the volume of content processed (Jira fields, attachments, file reads, analysis produced). These are approximations — label them clearly with `~`.
+
+Example:
+```
+IV-3672 | ~14m elapsed | ~5,100 in / ~2,040 out tokens | est. cost $0.0462 (Sonnet 4.6)
+```
+
+---
+
+### Step 11 — Generate PDF Analysis Report
 
 After Step 9 is complete, generate a full PDF report of the analysis and save it to disk.
 
-#### 10a. Configuration
+#### 11a. Configuration
 
 Resolve the output folder using this priority order:
 
@@ -450,7 +579,7 @@ REPORT_DIR="${CLAUDE_REPORT_DIR:-$HOME/Documents/DevelopmentTasks/Claude-Analyze
 mkdir -p "$REPORT_DIR"
 ```
 
-#### 10b. Generate Markdown Source
+#### 11b. Generate Markdown Source
 
 Write a temporary Markdown file at `/tmp/{TICKET_KEY}-analysis.md` containing the full analysis from all steps:
 
@@ -459,7 +588,7 @@ Write a temporary Markdown file at `/tmp/{TICKET_KEY}-analysis.md` containing th
 
 **Date:** {today's date}
 **Branch:** {feature branch name}
-**Analyst:** Claude (Prevoir Dev Skill)
+**Analyst:** Claude (Prevoir Dev Skill v1.1.0)
 
 ---
 
@@ -489,9 +618,12 @@ Write a temporary Markdown file at `/tmp/{TICKET_KEY}-analysis.md` containing th
 
 ## Step 9 — Change Summary
 {content}
+
+## Step 10 — Session Stats
+{content}
 ```
 
-#### 10c. Convert to PDF
+#### 11c. Convert to PDF
 
 Try each method in order, stopping at the first that succeeds. These methods work reliably on macOS, Linux, and Windows without platform-specific library dependencies.
 
@@ -587,7 +719,7 @@ cp /tmp/{TICKET_KEY}-analysis.html "{REPORT_DIR}/{TICKET_KEY}-analysis.html"
 Inform the developer:
 > "PDF generation unavailable (pandoc and Chrome not found). Report saved as HTML instead. Open in any browser and use File → Print → Save as PDF to convert manually."
 
-#### 10d. Archive and Confirm
+#### 11d. Archive and Confirm
 
 After saving, display the following to the developer (always show both the folder and the full file path):
 
@@ -597,6 +729,16 @@ After saving, display the following to the developer (always show both the folde
    File   : {REPORT_DIR}/{TICKET_KEY}-analysis.pdf
    Format : PDF  ← (or "HTML (PDF libraries unavailable)" if Method 3 was used)
 ```
+
+#### 11e. Temp File Cleanup
+
+After the report is confirmed saved, remove the intermediate temp files:
+
+```bash
+rm -f /tmp/{TICKET_KEY}-analysis.md /tmp/{TICKET_KEY}-analysis.html
+```
+
+If removal fails, note it but do not treat it as a blocking error.
 
 Then end with:
 
@@ -608,7 +750,7 @@ Then end with:
 
 ## Output Format
 
-Present output in clearly labelled sections matching the 10 steps above. Use markdown headings. Keep each section concise but complete. Step 10 produces the final confirmation message and report path — that replaces the closing "Ready to code" statement.
+Present output in clearly labelled sections matching the 11 steps above. Use markdown headings. Keep each section concise but complete. Step 11 produces the final confirmation message and report path — that replaces the closing "Ready to code" statement.
 
 ---
 

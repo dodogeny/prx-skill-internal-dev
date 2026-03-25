@@ -1,4 +1,4 @@
-# Prevoir Internal Dev Skill — Claude Code Plugin `v1.0.0`
+# Prevoir Internal Dev Skill — Claude Code Plugin `v1.1.0`
 
 A [Claude Code](https://claude.ai/code) plugin that gives Claude a structured, end-to-end developer workflow for V1 Jira tickets. Instead of manually reading a ticket, searching for files, and figuring out where to start, you invoke one command and Claude walks through the full cycle — from ticket ingestion to a proposed fix and archived report.
 
@@ -6,15 +6,15 @@ A [Claude Code](https://claude.ai/code) plugin that gives Claude a structured, e
 
 ## What It Does
 
-When you hand Claude a Jira ticket key (`IV-XXXX`), the skill executes **10 steps automatically**, presenting output at each step as it completes.
+When you hand Claude a Jira ticket key (`IV-XXXX`), the skill executes **11 steps automatically**, presenting output at each step as it completes.
 
 ---
 
 ### Step 1 — Ingest Ticket
 
-Fetches the Jira issue using only the fields that matter — summary, type, priority, status, assignee, reporter, labels, components, fix version, affected versions, description, comments, and attachments. Everything else (sprint metadata, change logs, epic links, watchers) is skipped to keep token usage low.
+Fetches the Jira issue requesting only the 13 fields that matter — summary, type, priority, status, assignee, reporter, labels, components, fix version, affected versions, description, comments, and attachments. Sprint metadata, change logs, epic links, and watcher lists are not fetched.
 
-Claude displays a structured ticket summary including the full description text extracted from Jira's ADF format, and lists all comments with their author, date, and full content.
+If the MCP call fails (authentication error, ticket not found, MCP not running), Claude states the exact error and stops — it does not proceed with partial or missing data. The developer is given clear recovery steps before continuing.
 
 ---
 
@@ -40,11 +40,11 @@ Claude analyses everything gathered in Step 1 and produces:
 
 Claude determines the correct base branch using a three-tier priority:
 
-1. **Fix Version is set** → searches for an existing release feature branch matching that version (e.g. `Feature/Release_1.24.292`). If found, forks from it so the fix builds on top of any release-level work already in progress.
-2. **Affected Versions is set** → forks from the version branch (e.g. `1.24.292`), stripping any patch suffix.
+1. **Fix Version is set** → derives the version string (e.g. `1.24.292` from `1.24.292.p1`), then checks whether `Feature/Release_{VERSION}` exists locally or on the remote. If found, forks from it so the fix builds on top of any release-level work already in progress. If not found, falls back to the plain version branch.
+2. **Affected Versions is set** → forks from the plain version branch (e.g. `1.24.292`), stripping any patch suffix.
 3. **Neither set** → forks from `development`.
 
-If the base branch cannot be confirmed locally or remotely, Claude pauses and asks rather than silently forking from a stale HEAD.
+**Confirmation gate:** Before any `git checkout`, Claude verifies the base branch exists locally or on the remote. If it cannot be confirmed in either place, Claude stops and asks the developer which branch to use rather than silently forking from a stale HEAD.
 
 The feature branch is named: `Feature/IV-XXXX_Ticket_Summary_In_Title_Case` and checked out ready to code.
 
@@ -74,6 +74,7 @@ Claude produces complete, numbered reproduction instructions that any developer 
 - **Reproduction steps** — numbered step-by-step actions from login through to the symptom
 - **Expected result** — what the system should do when working correctly
 - **Actual result** — the exact symptom the reporter observes
+- **Service restart guidance** — which spawner, worker, or application server must be restarted to pick up the fix during local testing, listed per layer (Plugin/Worker, Backend API, GWT Frontend)
 
 A **confidence gate** applies: High confidence proceeds automatically; Medium notes the assumption and proceeds; Low pauses and asks the developer to clarify before continuing to the fix.
 
@@ -90,9 +91,9 @@ Claude reads the identified files (using targeted line ranges from Step 4) and p
 
 ---
 
-### Step 7 — Impact, Risk & Change Summary
+### Step 7 — Impact Analysis
 
-A unified review of the consequences of the fix across the full application — backed by active codebase searching, not assumptions:
+A full review of the consequences of the fix across the entire application — backed by active codebase searching, not assumptions:
 
 - **Files changed table** — every file touched, the action taken (modified/created/deleted), what changed, and why
 - **Usage reference search** — for every modified method, class, field, or API, Claude greps the full codebase and produces a reference table of all callers and usages found. Public methods, interface implementations, DB columns, and GWT RPC service methods are all checked. A symbol confirmed unused outside its class is explicitly stated as such.
@@ -101,13 +102,17 @@ A unified review of the consequences of the fix across the full application — 
 - **Affected clients/environments** — whether the fix is generic (all clients), client-specific (named client due to config differences), or DB-specific (different behaviour on Oracle vs PostgreSQL)
 - **Retest checklist** — screens and flows outside the primary fix that should be smoke-tested, derived from the actual callers found in the usage search
 - **Risk level** — rated objectively based on caller count: Low (0–1 callers), Medium (2–5), High (6+ or DB/shared utility change) — stated prominently with a justification sentence
-- **Suggested commit message** — a ready-to-paste commit message following the project convention: `IV-XXXX_Title_VERSION`
 
 ---
 
-### Step 8 — Change Summary
+### Step 8 — Change Summary (Steps 8 & 9 in SKILL.md)
 
-Claude compiles a developer-ready summary covering files touched, what changed and why, and a suggested commit message ready to paste.
+Claude compiles a developer-ready summary covering:
+
+- **Files touched** — table of every file modified, created, or deleted with a one-line description
+- **What changed and why** — one paragraph per file explaining the change and the reasoning
+- **Suggested commit message** — ready-to-paste, following the project convention: `IV-XXXX_Title_VERSION`
+- **PR description template** — a fully populated pull request body including Jira link, branch, risk level, what changed, how to test, retest areas, and DB migration flag — ready to paste directly into GitHub/Bitbucket
 
 ---
 
@@ -121,16 +126,27 @@ IV-3672 | ~14m elapsed | ~5,100 in / ~2,040 out tokens | est. cost $0.0462 (Sonn
 
 ---
 
-### Step 10 — PDF Analysis Report
+### Step 10 — Session Stats
+
+Prints a single summary line with elapsed time, estimated token usage, and estimated cost at Sonnet 4.6 pricing:
+
+```
+IV-3672 | ~14m elapsed | ~5,100 in / ~2,040 out tokens | est. cost $0.0462 (Sonnet 4.6)
+```
+
+---
+
+### Step 11 — PDF Analysis Report
 
 Claude generates a full PDF report of the complete analysis and saves it to a configurable output folder:
 
-- **Output folder** — reads `$CLAUDE_REPORT_DIR` environment variable if set; defaults to `$HOME/Documents/Claude-Analyzed-Tickets/` (works on macOS, Linux, and Windows)
+- **Output folder** — reads `$CLAUDE_REPORT_DIR` environment variable if set; defaults to `$HOME/Documents/DevelopmentTasks/Claude-Analyzed-Tickets/` (works on macOS, Linux, and Windows)
 - **PDF generation** — tries three methods in order, stopping at the first that succeeds:
   1. **`pandoc`** — best quality, handles tables and code blocks correctly; install via `brew install pandoc` (macOS), `apt install pandoc` (Linux), or the [pandoc installer](https://pandoc.org/installing.html) (Windows)
   2. **Chrome / Chromium headless** — uses `--print-to-pdf`; works on all platforms if Chrome is installed; no additional setup required
   3. **HTML fallback** — saves a styled `.html` file and instructs the developer to print to PDF from their browser
 - **Confirmation** — always displays both the output folder and the full file path after saving
+- **Cleanup** — intermediate temp files (`/tmp/{TICKET_KEY}-analysis.md`, `.html`) are removed after the report is saved
 
 ---
 
@@ -189,7 +205,7 @@ The repository must be present at `$HOME/git/insight/` locally. The skill resolv
 > ```
 > Change `git/insight` to the path of your local repository relative to your home directory (e.g. `$HOME/projects/v1` or an absolute path like `/opt/repos/insight`).
 
-### PDF Generation (for Step 10)
+### PDF Generation (for Step 11)
 
 The skill tries three methods in order — no setup is required if Chrome or Chromium is already installed.
 
@@ -327,7 +343,7 @@ https://prevoirsolutions.atlassian.net/browse/IV-3672
 
 > `/dev` is the shorthand — it uses just the skill name. `/prevoir:dev` is the fully qualified form that includes the plugin namespace. Both work; use the fully qualified form if another installed plugin also has a skill named `dev`.
 
-Claude will immediately begin executing all 10 steps in order, presenting output for each step as it completes.
+Claude will immediately begin executing all 11 steps in order, presenting output for each step as it completes.
 
 ### Example output structure
 
@@ -343,12 +359,12 @@ Prior Investigation: None — proceeding fresh.
 Diagram saved to /tmp/IV-3672-diagram.drawio
 
 ## Step 3 — Branch Created
-Base branch: development (Fix Version not set; Affected Versions not set)
+Base branch: Feature/Release_1.26.064 (Fix Version set; Feature/Release branch found)
 Created: Feature/IV-3672_Resolving_Cases_Should_Resolve_Alerts
 HEAD: abc1234
 
 ## Step 4 — Affected Code
-| File | Role | Key Location |
+| File | Role | Key Location | Recent Git History |
 ...
 File map confidence: High — proceeding.
 
@@ -356,25 +372,27 @@ File map confidence: High — proceeding.
 Prerequisites: ...
 Steps: 1. Log in as admin...
 Confidence: Medium
+Restart: Backend-only change — restart the application server (Tomcat/embedded).
 
 ## Step 6 — Proposed Fix
 Root cause: CaseManager.java:2272 — pendingAlertResolve flag is never set...
 Before/After: ...
 
-## Step 7 — Impact & Risk
+## Step 7 — Impact Analysis
 Risk: Low | Files changed: 2 | Retest: 3 items
-Commit: IV3672_Resolving_Cases_Should_Resolve_Alerts_1.26.064
 
 ## Step 8 — Change Summary
-Files: 2 modified | Commit message ready to paste
+Files: 2 modified | Commit message ready to paste | PR description ready to paste
 
-## Step 9 — Session Stats
+## Step 9 — (internal step number — see SKILL.md)
+
+## Step 10 — Session Stats
 IV-3672 | ~14m elapsed | ~5,100 in / ~2,040 out tokens | est. cost $0.0462 (Sonnet 4.6)
 
-## Step 10 — PDF Report
+## Step 11 — PDF Report
 📄 Analysis Report Generated
-   Folder : ~/Documents/Claude-Analyzed-Tickets/
-   File   : ~/Documents/Claude-Analyzed-Tickets/IV-3672-analysis.pdf
+   Folder : ~/Documents/DevelopmentTasks/Claude-Analyzed-Tickets/
+   File   : ~/Documents/DevelopmentTasks/Claude-Analyzed-Tickets/IV-3672-analysis.pdf
    Format : PDF (Chrome headless)
 
 > Ready to code. Branch `Feature/IV-3672_Resolving_Cases_Should_Resolve_Alerts` is checked out.
@@ -395,7 +413,7 @@ IV-3672 | ~14m elapsed | ~5,100 in / ~2,040 out tokens | est. cost $0.0462 (Sonn
 │   ├── package.json            # Node package metadata
 │   └── skills/
 │       └── dev/
-│           └── SKILL.md        # The skill definition — all 10 steps
+│           └── SKILL.md        # The skill definition — all 11 steps
 ├── .gitignore
 └── README.md
 ```
@@ -528,7 +546,29 @@ claude plugin update prevoir@prevoir
 
 ---
 
-## Version History
+## Changelog
+
+### v1.1.0
+
+| # | Step | Change |
+|---|------|--------|
+| 1 | Step 1 — Ingest Ticket | Field restriction — fetches only 13 specific fields; skips sprint, epic, watcher, and changelog data to reduce token usage |
+| 2 | Step 1 — Ingest Ticket | MCP failure guard — stops on auth error / ticket not found / MCP unavailable and gives recovery instructions before proceeding |
+| 3 | Step 2 — Analyse & Contextualise | Draw.io issue diagram — generates a happy-path vs broken-path `.drawio` diagram for non-trivial flows; auto-skips for single-file bugs |
+| 4 | Step 3 — Create Branch | Feature/Release branch search — checks for `Feature/Release_{VERSION}` before falling back to the plain version branch |
+| 5 | Step 3 — Create Branch | Base branch confirmation gate — verifies branch exists locally or remotely before any `git checkout`; asks developer if not found |
+| 6 | Step 4 — Locate Code | Grep-first, read-second rule — explicitly forbids speculative full-file reads; token cost rationale documented |
+| 7 | Step 4 — Locate Code | Recent git history column added to file map — runs `git log --oneline -3` per primary file |
+| 8 | Step 4 — Locate Code | Confidence gate — Low confidence stops and asks; Medium flags assumption and proceeds |
+| 9 | Step 5 — Replicate Issue | Replication confidence gate — Low stops and asks; Medium proceeds with explicit flag |
+| 10 | Step 5 — Replicate Issue | Service restart guidance — tells developer which spawner/service to restart per layer (plugin, backend, frontend) |
+| 11 | Step 7 — Propose Fix | DB migration scripts explicitly cover both Oracle (`.sql`) and PostgreSQL (`.pg`) |
+| 12 | Step 8 — Change Summary | PR description template added — fully populated pull request body ready to paste (Jira link, branch, risk, test steps, retest areas, DB migration flag) |
+| 13 | Step 10 — Session Stats | New step — prints elapsed time, estimated token count, and estimated cost at Sonnet 4.6 pricing |
+| 14 | Step 11 — PDF Report | Temp file cleanup — removes `/tmp/{TICKET_KEY}-analysis.md` and `.html` after report is saved |
+| 15 | Step 11 — PDF Report | Default output folder updated to `$HOME/Documents/DevelopmentTasks/Claude-Analyzed-Tickets/` |
+
+---
 
 ### v1.0.0 — Initial Release
 

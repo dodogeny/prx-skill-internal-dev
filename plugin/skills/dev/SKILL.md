@@ -368,6 +368,63 @@ complementary paths explicitly before submitting the fix.
 5. **All matching shared entries** — business rules, patterns, risks matching the query are always included.
 6. **Never block on empty KB** — absence of prior knowledge is not an error; initialise and proceed.
 
+### Re-Index Rules
+
+INDEX.md and PALACE.md are **derived data** — they index what is in `tickets/` and `shared/`. They contain no information that is not already present in those source files. Because of this, they are **always fully rebuilt from scratch** after every pull rather than merged. This eliminates all consistency problems regardless of how many developers push, in what order, or whether a push was done manually outside the skill.
+
+**Why full rebuild, not append-only merge:**
+When multiple developers push to the same KB repo, git must merge their copies of INDEX.md and PALACE.md. Since both files are append-only tables, git's default merge will produce conflicts whenever two developers both added rows. Resolving these conflicts manually is error-prone and defeats the purpose of automation. A full rebuild from the actual source files on disk always produces a correct, conflict-free result.
+
+**`.gitattributes` — union merge for source files:**
+
+The KB repo must have a `.gitattributes` file to prevent git conflicts on `shared/*.md` files (both developers may append to `business-rules.md` in the same session). Add this to the KB repo root:
+
+```
+# KB repo .gitattributes
+tickets/*.md        merge=union
+shared/*.md         merge=union
+INDEX.md            merge=union
+PALACE.md           merge=union
+```
+
+`merge=union` tells git to keep lines from **both** sides on conflict (instead of marking `<<<<<<<` conflict markers). For append-only Markdown files this is always correct — all appended entries survive. The full rebuild then de-duplicates and normalises the result.
+
+**Full rebuild algorithm (runs after every pull, Step 0a):**
+
+```
+1. Scan all tickets/*.md files in KB_WORK_DIR:
+   For each file:
+     - Read YAML frontmatter: ticket, date, type, components, labels, summary, trigger, rooms
+     - Collect into an in-memory ticket list
+
+2. Scan all shared/*.md files in KB_WORK_DIR:
+   For each file, find all entries via "## {ID} — ..." headings:
+     - Read: ID, trigger phrase (from heading), domain, type, date
+     - Collect into an in-memory shared entry list
+
+3. Rebuild INDEX.md from scratch:
+   - Write fresh header: "Updated: {today} | Ticket entries: N | Shared entries: M"
+   - Write ## Ticket Entries table — one row per ticket, sorted by date desc
+   - Write ## Shared Knowledge Entries table — one row per shared entry
+
+4. Rebuild PALACE.md from scratch:
+   - Write fresh header: "Updated: {today} | Rooms: 6 | Triggers: N"
+   - For each of the 6 rooms, collect all triggers from tickets and shared entries
+     whose `rooms:` field includes that room
+   - Write each room's ### Triggers table with deduplicated, sorted rows
+   - For patterns: include the current Frequency value from the source entry
+
+5. Write both files to KB_WORK_DIR.
+```
+
+**This handles every multi-developer scenario automatically:**
+- Developer joins late with a stale INDEX.md → pull + rebuild gives them the full picture
+- Developer manually pushes raw ticket files → other developers' rebuild picks them up
+- Two developers push simultaneously → union merge keeps all rows → rebuild de-duplicates
+- Developer pushes from outside the skill → rebuild on next pull reconciles everything
+
+---
+
 ### Update Rules
 
 1. **Always write `tickets/IV-XXXX.md`** at the end of every Dev and Review session.
@@ -462,21 +519,31 @@ _(Applies only when `KB_MODE=distributed`. Skip entirely when `KB_MODE=local` �
 
 The distributed knowledge base lives in a **dedicated private git repository** (`PREVOIR_KB_REPO`) owned and controlled by the team. It is cloned locally at `KNOWLEDGE_DIR`. Because it is a standalone repository — not a branch on the product repo — git operations are straightforward: clone once, pull at session start, push at session end.
 
-**First-time setup (once per developer):**
-```bash
-KB_CLONE="${PREVOIR_KB_LOCAL_CLONE:-$HOME/.prevoir/kb}"
-git clone "$PREVOIR_KB_REPO" "$KB_CLONE"
-mkdir -p "$KB_CLONE/tickets" "$KB_CLONE/shared"
-```
-If `PREVOIR_KB_REPO` does not have any commits yet (new repo), initialise it:
+**First-time setup (once — when creating the KB repo for the team):**
 ```bash
 KB_CLONE="${PREVOIR_KB_LOCAL_CLONE:-$HOME/.prevoir/kb}"
 mkdir -p "$KB_CLONE/tickets" "$KB_CLONE/shared"
 cd "$KB_CLONE"
 git init && git remote add origin "$PREVOIR_KB_REPO"
 echo "# Prevoir Knowledge Base" > README.md
-git add README.md && git commit -m "init: create knowledge base repo"
+
+# Create .gitattributes — union merge prevents conflicts on append-only KB files
+cat > .gitattributes << 'EOF'
+tickets/*.md    merge=union
+shared/*.md     merge=union
+INDEX.md        merge=union
+PALACE.md       merge=union
+EOF
+
+git add README.md .gitattributes
+git commit -m "init: create knowledge base repo"
 git push -u origin main
+```
+
+If the repo already exists and a developer is cloning for the first time:
+```bash
+KB_CLONE="${PREVOIR_KB_LOCAL_CLONE:-$HOME/.prevoir/kb}"
+git clone "$PREVOIR_KB_REPO" "$KB_CLONE"
 ```
 
 **Pull (Step 0a — before session, distributed mode only):**
@@ -496,18 +563,49 @@ fi
 ```bash
 KB_CLONE="${PREVOIR_KB_LOCAL_CLONE:-$HOME/.prevoir/kb}"
 cd "$KB_CLONE"
+
+# Step 1 — Pull latest from remote before committing (rebase keeps history clean)
+# This ensures local commits land on top of any pushes made by other developers
+# since the session started, preventing non-fast-forward push failures.
+git pull --rebase origin main 2>/dev/null || \
+  echo "KB_PULL_WARN: rebase failed — proceeding with local-only commit."
+
+# Step 3 — Verify remote is reachable and the branch exists
+if git ls-remote --exit-code origin main >/dev/null 2>&1; then
+  REMOTE_EXISTS=true
+  echo "KB: remote origin/main verified."
+elif git ls-remote --exit-code origin >/dev/null 2>&1; then
+  # Remote repo exists but main branch not yet created (first push ever)
+  REMOTE_EXISTS=false
+  echo "KB: remote repo reachable — main branch does not exist yet, will create."
+else
+  echo "KB_PUSH_WARN: remote '${PREVOIR_KB_REPO}' is not reachable."
+  echo "             Changes committed locally. Push manually: cd ${KB_CLONE} && git push -u origin main"
+  exit 0
+fi
+
+# Step 4 — Stage and commit
 git add .
-if ! git diff --cached --quiet; then
-  git commit -m "kb({TICKET_KEY}): {type} — {one-line summary}"
+if git diff --cached --quiet; then
+  echo "KB: no changes to push."
+  exit 0
+fi
+git commit -m "kb({TICKET_KEY}): {type} — {one-line summary}"
+
+# Step 5 — Push (create remote branch if this is the first push)
+if [ "$REMOTE_EXISTS" = true ]; then
   git push origin main && echo "KB: pushed to ${PREVOIR_KB_REPO}."
 else
-  echo "KB: no changes to push."
+  git push --set-upstream origin main && \
+    echo "KB: created and pushed origin/main at ${PREVOIR_KB_REPO}."
 fi
 ```
 
-**If the push fails** (network unavailable, no remote access): log `KB_PUSH_WARN: {reason}` and continue. Changes remain committed in the local clone and can be pushed manually with `git push origin main` from `KNOWLEDGE_DIR`.
+**If the push fails after the reachability check** (auth error, network drop mid-push): log `KB_PUSH_WARN: push failed — {git error}`. Changes are committed locally; run `cd $KB_CLONE && git push origin main` manually.
 
-**Merge conflicts:** If `git pull` produces a conflict (two developers pushed simultaneously), resolve using `git mergetool` or by accepting the latest version (`git checkout --theirs .`). Prefer keeping both sets of knowledge — append rather than overwrite if possible.
+**Merge conflicts:** If `git pull` produces a conflict (two developers pushed simultaneously), resolve by preferring the most recent content. Prefer keeping both sets of knowledge — append rather than overwrite shared file entries where possible.
+
+**Remote repo does not exist at all** (the URL itself is invalid or the repo was never created): `git ls-remote` will fail with a fatal error. The agent logs `KB_PUSH_WARN: KB repository '${PREVOIR_KB_REPO}' does not exist or is inaccessible. Create the private repo first, then retry.` and skips the push without failing the session.
 
 ## Headless Mode
 
@@ -686,13 +784,61 @@ Updated: {today} | Rooms: 6 | Triggers: 0
 If `INDEX.md` does not exist, create the skeleton header (see INDEX.md Format above).
 If any `shared/*.md` file does not exist, create it with a title-only header.
 
-**Step 4 — Report status:**
+**Re-index after pull (distributed mode) or on every init (local mode):**
+
+After a pull, other developers may have pushed ticket or shared files that are not yet referenced in the local INDEX.md or PALACE.md. Scan the actual files on disk and reconcile any missing entries — do **not** rebuild from scratch; only add what is absent.
+
+```bash
+# Step 1 — Find ticket files not yet in INDEX.md
+for f in "$KB_WORK_DIR"/tickets/*.md; do
+  [ -f "$f" ] || continue
+  key=$(basename "$f" .md)                          # e.g. IV-3801
+  grep -q "$key" "$KB_WORK_DIR/INDEX.md" && continue  # already indexed
+
+  # Read frontmatter fields from the file
+  trigger=$(grep "^trigger:" "$f" | head -1 | sed 's/^trigger: *//')
+  rooms=$(grep   "^rooms:"   "$f" | head -1 | sed 's/^rooms: *//')
+  type=$(grep    "^type:"    "$f" | head -1 | sed 's/^type: *//')
+  date=$(grep    "^date:"    "$f" | head -1 | sed 's/^date: *//')
+  components=$(grep "^components:" "$f" | head -1 | sed 's/^components: *//')
+  labels=$(grep  "^labels:"  "$f" | head -1 | sed 's/^labels: *//')
+  summary=$(grep "^summary:" "$f" | head -1 | sed 's/^summary: *//')
+
+  # Add row to INDEX.md Ticket Entries table
+  echo "| $key | $date | $type | $components | $labels | $summary | tickets/${key}.md |" \
+    >> "$KB_WORK_DIR/INDEX.md"
+  echo "KB_REINDEX: added $key to INDEX.md"
+
+  # Add trigger to PALACE.md for each room listed in frontmatter
+  # (Agent reads PALACE.md and appends the trigger row to each matched room's table)
+  echo "KB_REINDEX: trigger '${trigger}' for rooms '${rooms}' — add to PALACE.md"
+done
+
+# Step 2 — Find shared entries not yet in INDEX.md
+for f in "$KB_WORK_DIR"/shared/*.md; do
+  [ -f "$f" ] || continue
+  fname=$(basename "$f")
+  # Scan for ## ENTRY-NNN headings
+  grep -oE "^## [A-Z]+-[0-9]+" "$f" | while read heading; do
+    id="${heading## }"                               # e.g. BIZ-001
+    grep -q "$id" "$KB_WORK_DIR/INDEX.md" && continue
+    trigger=$(grep -A1 "^## ${id}" "$f" | tail -1 | grep -oP '"[^"]+"' | head -1)
+    echo "KB_REINDEX: shared entry $id not in INDEX.md — add row for shared/$fname"
+  done
+done
+```
+
+After the re-index scan, update the `Updated:` date and counts in both INDEX.md and PALACE.md headers to reflect the current state.
+
+> **Why re-index on every pull?** INDEX.md and PALACE.md are derived data — they index what is in the `tickets/` and `shared/` directories. When a developer pushes their KB files, git merges the raw content files, but INDEX.md and PALACE.md may reflect different states from different developers. The re-index step makes the local derived files consistent with whatever files are actually present on disk after the pull, without overwriting anyone's entries.
+
+**Report status:**
 
 ```
 KB: {KNOWLEDGE_DIR}
-    Ticket entries : {N}
-    Shared entries : {M}
-    Palace triggers: {P}
+    Ticket entries : {N}  ({M} re-indexed from disk after pull)
+    Shared entries : {P}  ({Q} re-indexed from disk after pull)
+    Palace triggers: {R}
     Last updated   : {date from INDEX.md header or "new"}
 ```
 
@@ -2579,9 +2725,9 @@ Use the batch encrypt command from the **Encryption Scheme** section above. All 
 
 If encryption is not enabled, files were written directly to `KNOWLEDGE_DIR` in steps 13b–13e — skip this step.
 
-**Step 2 — Push to the private KB repository:**
+**Step 2 — Push to the private KB repository (with remote existence check):**
 
-Execute the git push sequence from the **Git Sync Rules** section above.
+Execute the git push sequence from the **Git Sync Rules** section above. The push step verifies remote reachability and auto-creates `origin/main` on first push using `--set-upstream`. If the remote is unreachable, it logs a warning and skips without failing the session.
 
 **Step 3 — If encryption is enabled: delete the session temp directory:**
 ```bash
@@ -2600,9 +2746,9 @@ On success display (encryption enabled):
    Patterns      : {N new / N bumped (PAT-XXX now seen {N}×)}
    Risks         : {N new / N updated}
    Palace        : {N triggers added to rooms: {room names}}
-   INDEX.md      : {N rows added}
+   INDEX.md      : {N rows added / N re-indexed from disk}
    Encrypted     : {N} .md.enc files written
-   Git           : pushed to origin/main ({short hash})
+   Git           : pushed to origin/main ({short hash}) {or "branch created" on first push}
    Session temp  : {KB_WORK_DIR} deleted
 ```
 
@@ -2617,11 +2763,11 @@ On success display (no encryption):
    Patterns      : {N new / N bumped (PAT-XXX now seen {N}×)}
    Risks         : {N new / N updated}
    Palace        : {N triggers added to rooms: {room names}}
-   INDEX.md      : {N rows added}
-   Git           : pushed to origin/main ({short hash})
+   INDEX.md      : {N rows added / N re-indexed from disk}
+   Git           : pushed to origin/main ({short hash}) {or "branch created" on first push}
 ```
 
-If push fails: replace the `Git` line with `Git: push failed — committed locally. Run: cd {KNOWLEDGE_DIR} && git push origin main`. If encryption was enabled, still delete `KB_WORK_DIR`.
+If push fails: replace the `Git` line with `Git: KB_PUSH_WARN — committed locally. Run: cd {KNOWLEDGE_DIR} && git push origin main`. If encryption was enabled, still delete `KB_WORK_DIR`.
 
 Then close with the ready-to-code message from Step 12.
 
@@ -3428,9 +3574,9 @@ Same as Step 13e — add/update the ticket row, add new shared entries, update c
 
 Use the batch encrypt command from the **Encryption Scheme** section above. If encryption is not enabled, files were written directly to `KNOWLEDGE_DIR` in steps R9b–R9e — skip this step.
 
-**Step 2 — Push to the private KB repository:**
+**Step 2 — Push to the private KB repository (with remote existence check):**
 
-Execute the git push sequence from the **Git Sync Rules** section above.
+Execute the git push sequence from the **Git Sync Rules** section above. The push step verifies remote reachability and auto-creates `origin/main` on first push using `--set-upstream`.
 
 **Step 3 — If encryption is enabled: delete the session temp directory:**
 ```bash
@@ -3450,9 +3596,9 @@ On success display (encryption enabled):
    Risks             : {N new / N updated}
    Architecture      : {N new / N updated}
    Palace            : {N triggers added to rooms: {room names}}
-   INDEX.md          : {N rows added}
+   INDEX.md          : {N rows added / N re-indexed from disk}
    Encrypted     : {N} .md.enc files written
-   Git           : pushed to origin/main ({short hash})
+   Git           : pushed to origin/main ({short hash}) {or "branch created" on first push}
    Session temp  : {KB_WORK_DIR} deleted
 ```
 
@@ -3468,11 +3614,11 @@ On success display (no encryption):
    Risks             : {N new / N updated}
    Architecture      : {N new / N updated}
    Palace            : {N triggers added to rooms: {room names}}
-   INDEX.md          : {N rows added}
-   Git           : pushed to origin/main ({short hash})
+   INDEX.md          : {N rows added / N re-indexed from disk}
+   Git           : pushed to origin/main ({short hash}) {or "branch created" on first push}
 ```
 
-If push fails: replace the `Git` line with `Git: push failed — committed locally. Run: cd {KNOWLEDGE_DIR} && git push origin main`. If encryption was enabled, still delete `KB_WORK_DIR`.
+If push fails: replace the `Git` line with `Git: KB_PUSH_WARN — committed locally. Run: cd {KNOWLEDGE_DIR} && git push origin main`. If encryption was enabled, still delete `KB_WORK_DIR`.
 
 ---
 

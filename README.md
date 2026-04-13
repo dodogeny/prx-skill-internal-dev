@@ -298,23 +298,66 @@ Choose how the KB is stored by setting the `PREVOIR_KB_MODE` environment variabl
 
 > **Why a separate private repo?** Keeping the KB in its own dedicated repository makes access control straightforward: grant or revoke access to the KB repo independently of any product codebase. A company-owned private Bitbucket or internal GitLab is ideal — only employees with access to that repo can read or push knowledge base content.
 
-#### Storage layout
+#### KB repository structure
+
+The KB is a standalone git repository with a flat, predictable layout. Whether stored locally or distributed, the directory structure is always the same:
 
 ```
-{KNOWLEDGE_DIR}/                    ← KB root (local clone of PREVOIR_KB_REPO, or local dir)
-├── PALACE.md   (or .md.enc)       ← Memory Palace: spatial map + trigger anchors
-├── INDEX.md    (or .md.enc)       ← master index — one line per entry, fallback lookup
-├── tickets/                        ← one file per analysed or reviewed ticket
-│   ├── IV-3672.md  (or .md.enc)
-│   └── IV-3695.md  (or .md.enc)
-└── shared/                         ← accumulated team knowledge
-    ├── business-rules.md  (or .md.enc)
-    ├── architecture.md    (or .md.enc)
-    ├── patterns.md        (or .md.enc)
-    └── regression-risks.md (or .md.enc)
+prevoir-kb/                         ← root of the KB git repository
+├── README.md                       ← auto-created on first push (repo description)
+│
+├── PALACE.md                       ← Memory Palace — primary retrieval layer
+│                                      Maps V1 system areas to named Rooms.
+│                                      Each knowledge entry has a vivid trigger phrase
+│                                      so agents recognise relevance in under 1 second.
+│
+├── INDEX.md                        ← Master index — fallback retrieval layer
+│                                      One row per knowledge entry (tickets + shared).
+│                                      Greppable by ticket key, component, label, trigger.
+│
+├── tickets/                        ← One file per analysed or reviewed ticket
+│   ├── IV-3672.md                  ← Bug fix: alerts not resolved on case close
+│   ├── IV-3695.md                  ← Enhancement: bulk-resolve endpoint
+│   └── IV-3801.md                  ← Review: IV-3672 fix verified
+│
+└── shared/                         ← Accumulated team knowledge (growing over time)
+    ├── business-rules.md           ← Domain invariants that must always hold
+    │                                  (e.g. "resolving a case must resolve its alerts")
+    ├── architecture.md             ← Class hierarchies, data flows, ownership decisions
+    │                                  (e.g. "AbstractXxxListener owns shared config")
+    ├── patterns.md                 ← Recurring bug/fix patterns with frequency counters
+    │                                  (e.g. "Boolean flag set, never reset — seen 3×")
+    └── regression-risks.md         ← Fragile areas that require care on every change
+                                       (e.g. "resolveCase() called from 4 screens")
 ```
 
-In local mode and in unencrypted distributed mode, all files are plain `.md`. When encryption is enabled, files on disk are `.md.enc` and agents decrypt to a secure session temp directory.
+**In distributed mode with encryption enabled**, all `.md` files are replaced by `.md.enc` binary blobs on disk and in the remote repo. The structure is identical — only the file extension changes.
+
+#### What each file contains
+
+| File | Written by | Contents |
+|------|-----------|----------|
+| `PALACE.md` | Steps 13d / R9d | Per-room trigger tables. Each row: trigger phrase → KB entry ID → type → file path. Updated after every session. |
+| `INDEX.md` | Steps 13e / R9e | Master flat table of all entries. Columns: ticket/ID, date, type, components, labels, summary, trigger, file. |
+| `tickets/IV-XXXX.md` | Steps 13b / R9b | Full session record: problem, root cause, fix, business rules discovered, architecture insights, patterns observed, regression risks, related tickets, verdict (review sessions). |
+| `shared/business-rules.md` | Steps 13c / R9c | Domain invariants. Each entry confirmed or violated across sessions. |
+| `shared/architecture.md` | Steps 13c / R9c | Class hierarchy decisions, data flow knowledge, ownership rules. |
+| `shared/patterns.md` | Steps 13c / R9c | Recurring patterns with `Frequency: N` counter — incremented each recurrence. |
+| `shared/regression-risks.md` | Steps 13c / R9c | Fragile areas flagged by Riley or discovered via usage searches. |
+
+#### Storage layout (on developer's machine)
+
+```
+$HOME/.prevoir/kb/                  ← KNOWLEDGE_DIR (local clone of the private KB repo)
+│                                     Contains the files above.
+│                                     In encrypted mode: .md.enc files at rest.
+│
+/tmp/prevoir-kb-{PID}/              ← KB_WORK_DIR (encrypted mode only)
+│                                     Decrypted .md files for the current session.
+│                                     Deleted automatically after push.
+```
+
+In local mode and in unencrypted distributed mode, all files are plain `.md` and `KB_WORK_DIR` points directly to `KNOWLEDGE_DIR` — no temp directory is used.
 
 #### Encryption (distributed mode — optional, defense-in-depth)
 
@@ -333,12 +376,81 @@ Encryption is not required when the KB is already in a private repository with p
 
 | Action | When | What happens |
 |--------|------|-------------|
-| **Pull** (get latest from team) | Start of every session (Step 0a) | `git pull origin main` on the local clone; if clone doesn't exist yet, clone the repo first. If encrypted: decrypt files to session temp dir. |
-| **Push** (share with team) | End of every session (Steps 13f / R9f) | If encrypted: encrypt session files to `.md.enc`; then `git add . && git commit && git push origin main`. Delete session temp dir if encrypted. |
+| **Pull** (get latest from team) | Start of every session (Step 0a) | `git pull origin main`; clone first if local clone doesn't exist. If encrypted: decrypt to session temp dir. Then **re-index** (see below). |
+| **Push** (share with team) | End of every session (Steps 13f / R9f) | Remote existence check → commit → push. Auto-creates `origin/main` on first push via `--set-upstream`. If encrypted: encrypt before push, delete temp dir after. |
 
-> **First-time setup:** Clone the private KB repo once (`git clone PREVOIR_KB_REPO`). The skill creates the directory structure automatically on the first session. See Prerequisites for the full setup steps.
+> **First-time setup:** The skill clones the private KB repo automatically on the first session. No manual `git clone` required.
 
-> **Merge conflicts:** If two developers push at the same time, resolve with `git mergetool` or by preferring the latest version. The append-only structure of KB files minimises conflicts in practice.
+> **Merge conflicts:** If two developers push at the same time, resolve by preferring the most recent content. The append-only structure of KB files minimises conflicts in practice.
+
+#### Multi-developer concurrent usage
+
+The KB is designed for teams of any size pushing concurrently. Here is how each scenario is handled:
+
+**The fundamental design decision:** INDEX.md and PALACE.md contain no information that is not already in `tickets/*.md` and `shared/*.md`. They are derived indexes. Because of this they are **always fully rebuilt from scratch after every pull** — not merged. This eliminates consistency problems regardless of how many developers push or in what order.
+
+**`.gitattributes` — union merge for source files:**
+
+The KB repo ships with a `.gitattributes` file (created on first setup) that tells git to use union merge on all KB files:
+
+```
+tickets/*.md    merge=union
+shared/*.md     merge=union
+INDEX.md        merge=union
+PALACE.md       merge=union
+```
+
+Union merge means: instead of marking `<<<<<<< conflict` markers, git keeps all lines from **both** sides. For append-only Markdown files (each developer adds new entries, no one edits others' entries) this is always correct. The full rebuild then de-duplicates any doubled rows.
+
+**Scenario walkthroughs:**
+
+```
+5 developers, all active:
+
+Dev A  pushes tickets/IV-3672.md + shared update (their INDEX reflects only their work)
+Dev B  pushes tickets/IV-3801.md + shared update (their INDEX reflects only their work)
+Dev C  pulls → git union-merges both INDEX.md versions (all rows kept)
+               → full rebuild from tickets/*.md + shared/*.md
+               → INDEX.md and PALACE.md now reference IV-3672 AND IV-3801
+               ✅ Dev C sees the complete picture
+
+Dev D  pushes while Dev E is also pushing:
+         → one push wins, the other gets rejected (non-fast-forward)
+         → rejected dev does: git pull --rebase → git push
+         → rebase replays their commit on top of the winner's
+         ✅ Both commits preserved, no knowledge lost
+
+───────────────────────────────────────────────────────────────
+6th developer joins late and manually pushes their KB files
+(without using the skill — raw git commands):
+
+  cd $HOME/.prevoir/kb
+  git add tickets/IV-3910.md shared/business-rules.md
+  git commit -m "manual: add IV-3910 findings"
+  git push origin main
+
+→ Other developers pull on their next session
+→ git union-merge keeps all rows in INDEX.md and PALACE.md
+→ full rebuild adds IV-3910 and any new shared entries to INDEX and Palace
+✅ Manual push fully integrated — no broken state
+```
+
+**Pre-push pull (built into the push sequence):**
+
+Before every push, the skill runs `git pull --rebase origin main` first. This replays the local KB commit on top of whatever other developers pushed during the session, preventing non-fast-forward rejections.
+
+#### Remote existence check — safe first push
+
+Before every push, the skill checks whether `origin/main` is reachable:
+
+| Scenario | What happens |
+|----------|-------------|
+| Remote branch exists | Normal `git push origin main` |
+| Remote repo exists, branch missing (first push ever) | `git push --set-upstream origin main` — creates branch automatically |
+| Remote repo unreachable (network, wrong URL) | `KB_PUSH_WARN` logged, push skipped, changes committed locally for manual push later |
+| Remote repo does not exist (URL was never created) | `KB_PUSH_WARN` with instructions to create the private repo first |
+
+No session is blocked by a push failure — the KB is always committed locally and can be pushed when connectivity is restored.
 
 #### Memory Palace — the primary retrieval layer
 

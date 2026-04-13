@@ -15,7 +15,7 @@ The skill runs in one of two modes based on how you invoke it.
 
 ### Dev Mode
 
-When you hand Claude a Jira ticket key (`IV-XXXX`), the skill executes **12 steps automatically**, presenting output at each step as it completes.
+When you hand Claude a Jira ticket key (`IV-XXXX`), the skill executes **14 steps automatically** (Step 0 → Steps 1–12 → Step 13), presenting output at each step as it completes.
 
 ---
 
@@ -279,12 +279,209 @@ The PDF is structured in 11 sections, one per step. Every section is fully popul
 
 ---
 
+### Knowledge Base (Step 0 + Step 13 / Step R0 + Step R9)
+
+Every Dev and Review session feeds into a **shared, persistent knowledge base** stored as plain Markdown files. The KB grows richer after every ticket — capturing business rules, root causes, recurring patterns, architecture insights, and regression risks so the whole team becomes progressively smarter about the codebase.
+
+#### Two storage modes
+
+Choose how the KB is stored by setting the `PREVOIR_KB_MODE` environment variable:
+
+| Mode | KB location | Distribution | Access control | Encryption |
+|------|-------------|-------------|----------------|-----------|
+| **local** *(default)* | `$HOME/Documents/Prevoir/KnowledgeBase/` | None — private to one machine | Local filesystem | None — plain Markdown |
+| **distributed** | Local clone of your private KB repo | Via git push/pull to your team's own private repository | Your git server's permissions (Bitbucket, GitHub Enterprise, GitLab…) | Optional AES-256-CBC (`.md.enc`) |
+
+**Local mode** is the default and requires no extra configuration. The KB lives on your machine only.
+
+**Distributed mode** shares the KB across your whole team via a **dedicated private git repository you own and control** (`PREVOIR_KB_REPO`). You decide who can access it — restrict it to your company's Bitbucket or GitHub Enterprise org and the knowledge never leaves your environment. No data goes to any public repository.
+
+> **Why a separate private repo?** Keeping the KB in its own dedicated repository makes access control straightforward: grant or revoke access to the KB repo independently of any product codebase. A company-owned private Bitbucket or internal GitLab is ideal — only employees with access to that repo can read or push knowledge base content.
+
+#### Storage layout
+
+```
+{KNOWLEDGE_DIR}/                    ← KB root (local clone of PREVOIR_KB_REPO, or local dir)
+├── PALACE.md   (or .md.enc)       ← Memory Palace: spatial map + trigger anchors
+├── INDEX.md    (or .md.enc)       ← master index — one line per entry, fallback lookup
+├── tickets/                        ← one file per analysed or reviewed ticket
+│   ├── IV-3672.md  (or .md.enc)
+│   └── IV-3695.md  (or .md.enc)
+└── shared/                         ← accumulated team knowledge
+    ├── business-rules.md  (or .md.enc)
+    ├── architecture.md    (or .md.enc)
+    ├── patterns.md        (or .md.enc)
+    └── regression-risks.md (or .md.enc)
+```
+
+In local mode and in unencrypted distributed mode, all files are plain `.md`. When encryption is enabled, files on disk are `.md.enc` and agents decrypt to a secure session temp directory.
+
+#### Encryption (distributed mode — optional, defense-in-depth)
+
+Encryption is not required when the KB is already in a private repository with proper access controls. Enable it for defense-in-depth — for example, if there is any risk the repo could be accidentally made public, or if company policy requires data encrypted at rest.
+
+| Property | Detail |
+|----------|--------|
+| Algorithm | AES-256-CBC |
+| Key derivation | PBKDF2-SHA512, 310,000 iterations, random salt per file |
+| Key source | `PREVOIR_KB_KEY` env var — **never committed to git** |
+| Files on disk (encrypted) | Binary `.md.enc` blobs — appear as garbage without the key |
+| Files in session (encrypted) | Decrypted to `/tmp/prevoir-kb-{PID}/` only; deleted after push |
+| Files on disk (unencrypted) | Plain `.md` — accessed directly from the local clone |
+
+#### Team distribution (distributed mode)
+
+| Action | When | What happens |
+|--------|------|-------------|
+| **Pull** (get latest from team) | Start of every session (Step 0a) | `git pull origin main` on the local clone; if clone doesn't exist yet, clone the repo first. If encrypted: decrypt files to session temp dir. |
+| **Push** (share with team) | End of every session (Steps 13f / R9f) | If encrypted: encrypt session files to `.md.enc`; then `git add . && git commit && git push origin main`. Delete session temp dir if encrypted. |
+
+> **First-time setup:** Clone the private KB repo once (`git clone PREVOIR_KB_REPO`). The skill creates the directory structure automatically on the first session. See Prerequisites for the full setup steps.
+
+> **Merge conflicts:** If two developers push at the same time, resolve with `git mergetool` or by preferring the latest version. The append-only structure of KB files minimises conflicts in practice.
+
+#### Memory Palace — the primary retrieval layer
+
+The Memory Palace (`PALACE.md`) applies the **Method of Loci** to make prior knowledge instantly recognisable. The V1 system is divided into named **Rooms** (CASE ROOM, ALERT ROOM, FRONT ROOM, ENGINE ROOM, WORKER ROOM, VAULT). Each knowledge entry has a **vivid trigger phrase** — a 5–8 word memorable anchor. Agents read the Palace first, scan triggers for their matched rooms, and surface all relevant knowledge in ≤ 3 read operations regardless of how large the KB grows.
+
+```
+System Map (loci):
+
+   GWT Frontend (fcfrontend)      ← 🖥️  FRONT ROOM
+         │ RPC
+   Backend API (fcbackend)        ← 🔧 ENGINE ROOM
+         │
+   ┌─────┴──────────────┐
+   CaseManager (FRAMS)  AlertCentral (FRAMS)  Plugin/Workers
+   🏠 CASE ROOM         🚨 ALERT ROOM         ⚙️  WORKER ROOM
+         └─────────────────────────────────┘
+                         │
+                  Database (fcbuild)          ← 🗄️  VAULT
+```
+
+**Trigger examples:**
+- `"resolve case → must resolve alerts"` → BIZ-001 (business rule)
+- `"flag set, never reset — boolean trap"` → PAT-001 (pattern, seen 3×)
+- `"resolveCase — four callers watch this"` → RISK-001 (regression risk)
+- `"pendingAlertResolve drives the chain"` → ARCH-001 (architecture)
+
+When Jordan sees a ticket touching `CaseManager`, he reads the CASE ROOM triggers and immediately recognises `"flag set, never reset"` from a previous session — before writing a single line of grep.
+
+#### External knowledge sources
+
+The KB query also reaches out to two live external sources:
+
+| Source | What it provides |
+|--------|-----------------|
+| **Confluence** (`prevoirsolutions.atlassian.net/wiki`) | Business requirements, functional specs, known limitations — queried by component/label and included in the Prior Knowledge block |
+| **Bitbucket / V1 source** (`bitbucket.org/prevoirsolutionsinformatiques/insight`, `development` branch) | Live codebase — used to cross-check KB `file:line` references and confirm they are still current before the investigation team acts on them |
+
+Confluence results appear in the Prior Knowledge block under a `CONFLUENCE` section. Stale KB references found via Bitbucket are flagged with `⚠️` so the investigation team knows to verify them in Step 5.
+
+#### How knowledge enters the KB — inline annotation during active work
+
+Agents do not wait until the end of a session to generate knowledge. Business rules, architecture insights, patterns, and regression risks are discovered *during* the work — while exploring code (Step 5), investigating root causes (Step 7), proposing fixes (Step 8), and reviewing diffs (Steps R4/R5). Each agent emits a lightweight `[KB+]` marker at the point of discovery:
+
+```
+[KB+ BIZ]  When resolving a case, alerts must also be resolved — Source: CaseManager.java:2272
+[KB+ ARCH] AbstractXxxListener owns shared config; concrete subclass only wires getConfig()
+[KB+ PAT]  Pattern #2: Boolean flag set but never reset — CaseManager.java:2310 [BUMP]
+[KB+ RISK] resolveCase() called from 4 screens — changes here silently break AlertCentral
+```
+
+| Agent | What they annotate |
+|-------|-------------------|
+| **Morgan** | Business rules confirmed / discovered via JIRA historical search |
+| **Alex** | Regression-inducing commits, historical coupling found via git blame |
+| **Sam** | Domain invariants implied by data flow, component interactions |
+| **Jordan** | Defensive pattern matches (NEW or BUMP), structural architecture insights |
+| **Riley** | Fragile areas, untested regression surfaces, business rules from acceptance criteria |
+
+At the end of the session, Step 13 / R9 collects every `[KB+]` marker from all steps alongside the structured session extracts. Morgan de-duplicates and confirms before writing. Nothing discovered during the session is lost.
+
+#### Morgan's JIRA historical investigation (before every panel)
+
+Before briefing the engineering panel, **Morgan searches JIRA for past tickets** on the same component and label that have been Closed or Resolved. This surfaces whether:
+- The exact same bug has been fixed before — and where
+- A prior root cause investigation exists in ticket comments
+- A past fix introduced a regression that is now relevant again
+
+```
+JQL: project = IV AND component in ("{COMPONENTS}") 
+     AND status in (Done, Resolved, Closed) 
+     AND summary ~ "{KEY_TERM}" ORDER BY updated DESC
+```
+
+Morgan presents the results to the team as a **Historical JIRA Precedents** block before investigation begins:
+
+```
+┌─ Morgan — Historical JIRA Precedents ──────────────────────────────────┐
+│ [IV-3672] (2026-03-10)  "Alerts not resolved when case is closed"      │
+│   Root cause: pendingAlertResolve flag not set before save              │
+│   Fix area  : CaseManager.java:2272                                    │
+│   Relevance : High — same component, same symptom                      │
+│                                                                        │
+│ Team note: "IV-3672 is directly relevant — Jordan, check Pattern #2.   │
+│            Alex, find the commit and confirm the fix area."             │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+This runs in **both Dev Mode (Step 7b)** and **Review Mode (Step R5a)**. If no past tickets are found or JIRA is unavailable, the investigation proceeds fresh with no interruption.
+
+#### What gets recorded after each session
+
+| Type | File | Sources |
+|------|------|---------|
+| **Ticket entry** | `tickets/IV-XXXX.md` | Root cause / fix, trigger phrase, rooms, KB annotations, verdict (review sessions) |
+| **Business rules** | `shared/business-rules.md` | `[KB+ BIZ]` markers from all agents + structured Step 2/3/7 extracts + JIRA history |
+| **Architecture** | `shared/architecture.md` | `[KB+ ARCH]` markers from Step 5/7/R5 + class hierarchy analysis |
+| **Patterns** | `shared/patterns.md` | `[KB+ PAT NEW]` for first occurrence, `[KB+ PAT BUMP]` to increment frequency |
+| **Regression risks** | `shared/regression-risks.md` | `[KB+ RISK]` from Riley and Alex, plus Step 9 usage search results |
+| **PALACE.md** | `PALACE.md` | New triggers added to matched rooms; pattern frequency counters bumped |
+| **INDEX.md** | `INDEX.md` | Master index updated with all new rows and counts |
+
+#### Iterative growth in practice
+
+```
+Session 1 (IV-3672, bug)
+  Step 5 : Sam emits [KB+ BIZ] → "flag must be set before save"
+           Sam emits [KB+ ARCH] → "AbstractCaseListener owns flag state"
+  Step 7 : Jordan emits [KB+ PAT] Pattern #2 [NEW] → CaseManager:2310
+           Riley emits [KB+ RISK] → "resolveCase() called from 4 screens"
+  Step 7b: Morgan JIRA search → no past tickets found
+  Step 13: writes IV-3672.md, BIZ-001, ARCH-001, PAT-001 (freq:1), RISK-001
+           Palace: 4 triggers added to CASE ROOM + ALERT ROOM
+           Push → private KB repo
+
+Session 2 (IV-3801, review)
+  Step R0: Palace query → CASE ROOM → "flag set, never reset" hits PAT-001
+  Step R5a: Morgan JIRA search → finds IV-3672 (High relevance)
+           "Jordan, Pattern #2 was the culprit in IV-3672 — check the diff for the same."
+  Step R5b: Jordan emits [KB+ PAT] Pattern #2 [BUMP] → confirmed in diff
+            Sam emits [KB+ BIZ] → BIZ-001 confirmed by diff
+  Step R9 : bumps PAT-001 freq:1→2, confirms BIZ-001
+            Push → private KB repo
+
+Session 3 (IV-3910, bug)
+  Step 0 : Palace → PAT-001 (freq:2) triggers immediately
+  Step 7b: Morgan JIRA search → finds IV-3672 AND IV-3801 (both High)
+           "Pattern #2 has occurred twice — Jordan, lead with it."
+  Step 7 : Jordan confirms Pattern #2 again [BUMP]
+  Step 13: bumps PAT-001 freq:2→3, adds RISK-003
+           Push → private KB repo
+```
+
+After ~20 sessions: the team has a living map of every root cause, every business rule, every fragile area — discovered *during* the work, shared automatically via git, retrieved in ≤ 3 read operations via the Palace.
+
+---
+
 ### PR Review Mode
 
-When you add the word `review` before or near the ticket key, the skill switches to **PR Review Mode** and executes **8 steps** instead:
+When you add the word `review` before or near the ticket key, the skill switches to **PR Review Mode** and executes **10 steps**:
 
 | Step | What happens |
 |------|-------------|
+| **R0 — Knowledge Base** | Initialises the knowledge base if needed; after the ticket is read, queries it by components/labels and presents a Prior Knowledge block to the review panel |
 | **R1 — Read Ticket** | Fetches the Jira ticket (same as Dev Mode Step 1) |
 | **R2 — Understand Problem & Associated Tickets** | Analyses description, all linked/associated tickets (blocked by, blocks, relates to, cloned from, parent epics, sub-tasks), and attachments — same full analysis as Dev Mode Step 2. All linked ticket context (prior investigations, acceptance criteria changes, design decisions, regression history) is carried forward into the review panel so reviewers understand the full expected behaviour, not just the primary ticket. |
 | **R3 — Read Comments** | Extracts prior investigation, decisions, and constraints from comments (same as Step 3) |
@@ -293,6 +490,7 @@ When you add the word `review` before or near the ticket key, the skill switches
 | **R6 — Consolidated Review Report** | Structured findings block listing all Critical, Major, and Minor issues with `file:line` references and specific fix recommendations, followed by Positives, Test Coverage Summary, and the ordered Conditions for Approval |
 | **R7 — Session Stats** | Elapsed time, estimated tokens, estimated cost |
 | **R8 — PDF Review Report** | Full report saved to `{REPORT_DIR}/{TICKET_KEY}-review.pdf` using the same three-method generation sequence (pandoc → Chrome headless → HTML fallback). Report includes all step output, the consolidated findings, and the Morgan verdict. |
+| **R9 — Knowledge Base Update** | Records review findings to `tickets/{TICKET_KEY}.md`; confirms or flags business rules; bumps pattern frequency counters for any Jordan patterns found in the diff; adds new regression risks and architecture insights to shared files; updates `INDEX.md` |
 
 #### Review Verdict
 
@@ -594,6 +792,58 @@ The repository must be present at `$HOME/git/insight/` locally. The skill resolv
 > REPO_DIR = $HOME/git/insight
 > ```
 > Change `git/insight` to the path of your local repository relative to your home directory (e.g. `$HOME/projects/v1` or an absolute path like `/opt/repos/insight`).
+
+### Knowledge Base (for Steps 0, 13, R0, R9)
+
+The knowledge base is created automatically the first time the skill runs — no manual setup required for the default local mode.
+
+#### Local mode (default — no setup needed)
+
+The KB is stored at `$HOME/Documents/Prevoir/KnowledgeBase/` with no git sync and no encryption. This is the default if `PREVOIR_KB_MODE` is not set.
+
+```bash
+# Optional: override the local KB path
+export PREVOIR_KNOWLEDGE_DIR="/your/custom/kb/path"
+```
+
+#### Distributed mode (team sharing via your own private repository)
+
+To share the KB across your team, you need a **dedicated private git repository** that you own and control. Any git hosting works: company Bitbucket, GitHub Enterprise, internal GitLab, etc. The skill never pushes to any public repository.
+
+**Step 1 — Create a new empty private repository on your git server.**
+
+For example, on Bitbucket: create a new private repo called `prevoir-kb` in your company's workspace.
+
+**Step 2 — Set environment variables in your shell profile** (`~/.zshrc` or `~/.bash_profile`):
+
+```bash
+export PREVOIR_KB_MODE=distributed
+export PREVOIR_KB_REPO="git@bitbucket.org:mycompany/prevoir-kb.git"   # your private KB repo URL
+export PREVOIR_KB_LOCAL_CLONE="$HOME/.prevoir/kb"                      # optional: default is $HOME/.prevoir/kb
+```
+
+**Step 3 — Reload your shell:**
+```bash
+source ~/.zshrc   # or source ~/.bash_profile
+```
+
+The skill clones the repo automatically on the first session. No manual `git clone` required.
+
+> **First session:** The skill initialises the KB directory structure and pushes it to the private repo. All subsequent sessions pull the latest KB before starting.
+
+#### Optional: add encryption (defense-in-depth)
+
+If you want encrypted files at rest — for example, company policy requires it or you want protection if the repo is ever accidentally made public — also set:
+
+```bash
+export PREVOIR_KB_KEY="your-strong-secret-passphrase"
+```
+
+> **Important:** Never commit `PREVOIR_KB_KEY` to any file tracked by git. Share it with team members through a secure channel (1Password, company secrets manager, etc.).
+
+With `PREVOIR_KB_KEY` set, all KB files are AES-256-CBC encrypted before each push and decrypted to a session temp directory at the start of each session. Without it, plain Markdown is pushed directly — which is fine when the private repo's access controls are sufficient.
+
+> **If `PREVOIR_KB_REPO` is not set in distributed mode:** The skill warns you and continues without prior knowledge. No KB reads or writes are performed until the variable is set.
 
 ### PDF Generation (for Step 12 — PDF Report)
 
@@ -1339,6 +1589,49 @@ claude plugin update prevoir@prevoir
 ## Changelog
 
 ### v1.2.1
+
+#### Shared Knowledge Base — New Feature
+
+| # | Area | Change |
+|---|------|--------|
+| 1 | KB — Dual storage modes | **`KB_MODE=local` (default):** KB lives in `$HOME/Documents/Prevoir/KnowledgeBase/` — private to one machine, no git, no encryption, zero setup. **`KB_MODE=distributed`:** KB lives in a dedicated private git repository (`PREVOIR_KB_REPO`) that the team owns and controls. Each developer clones the repo locally; the skill pulls at session start and pushes at session end. Access is governed entirely by the private repo's permissions. |
+| 2 | KB — Private dedicated repository | **No data in any public repo.** In distributed mode the KB is pushed to a separate standalone git repository (`PREVOIR_KB_REPO`) distinct from both the product repo and the skill repo. The team can use any private git hosting: company Bitbucket, GitHub Enterprise, GitLab, etc. This gives full access control — grant or revoke per developer independently. |
+| 3 | KB — Git distribution (Steps 0a / R0a) | **Auto-pull at session start** — `git pull origin main` on the local KB repo clone. **Auto-push at session end** (Steps 13f / R9f) — `git add . && git commit && git push origin main` on the same clone. No worktrees, no orphan branches — standard git on a dedicated repo. |
+| 4 | KB — Optional AES-256-CBC encryption | **`PREVOIR_KB_KEY` (optional):** When set, all KB files are encrypted with AES-256-CBC + PBKDF2-SHA512 (310,000 iterations) before each push and decrypted to a session temp directory at session start. This provides defense-in-depth — useful if company policy requires data encrypted at rest or if there is any risk of the private repo being made public. When not set, plain Markdown is pushed directly (appropriate for well-controlled private repos). |
+| 5 | KB — Memory Palace (PALACE.md) | **New primary retrieval layer using Method of Loci.** The V1 system is divided into 6 named Rooms (🏠 CASE ROOM, 🚨 ALERT ROOM, 🖥️ FRONT ROOM, 🔧 ENGINE ROOM, ⚙️ WORKER ROOM, 🗄️ VAULT) matching the system layers. Each knowledge entry has a **vivid trigger phrase** (5–8 words, memorable). Agents read PALACE.md first, scan trigger tables for matched rooms, and surface all relevant knowledge in ≤ 3 read operations — regardless of KB size. Triggers are added to PALACE.md in Steps 13d / R9d and frequency counters are bumped on pattern recurrence. |
+| 6 | KB — INDEX.md (fallback layer) | `INDEX.md` gains a `Trigger` column matching PALACE.md. Used as fallback if Palace yields no matches. Greppable by component, label, ticket key, and trigger phrase. |
+| 7 | KB — Retrieval (Steps 0b / R0b) | **Two-layer retrieval**: (1) Palace — read PALACE.md, map ticket to rooms by component/label, scan room trigger tables; (2) INDEX fallback — grep INDEX.md by component/label. Max 5 ticket entries (most recent). All matching shared entries always included. Prior Knowledge block shown to the full engineering team before investigation begins. |
+| 8 | KB — External sources | **Confluence integration** — at Step 0b, queries `prevoirsolutions.atlassian.net/wiki/x/uACUAw` by component/label using the Atlassian MCP to find spec pages, business rules, and known limitations; results appear in Prior Knowledge under a `CONFLUENCE` section. **Bitbucket cross-check** — KB `file:line` references are verified against the live `development` branch at `bitbucket.org/prevoirsolutionsinformatiques/insight`; stale references are flagged `⚠️` before the investigation team acts on them. |
+| 9 | KB — Dev update (Steps 13b–13f) | Writes `tickets/{TICKET_KEY}.md` with trigger + rooms metadata; appends to shared files; updates PALACE.md with new triggers; updates INDEX.md; pushes to private KB repo. |
+| 10 | KB — Review update (Steps R9b–R9f) | Same as Step 13 but records review verdict, confirmed/violated business rules, and QA gaps as regression risks; bumps pattern frequency counters; pushes to private KB repo. |
+| 11 | KB — Iterative growth | Pattern frequency counters increment each recurrence. After 3 occurrences of the same pattern, Morgan leads with it as the primary hypothesis. Business rules accumulate and are confirmed or flagged violated across all sessions. The Palace grows triggers in the correct rooms automatically. |
+| 12 | KB — Headless mode | Pull, initialise, query, write, and push all run in headless mode. Push failures log `KB_PUSH_WARN:` and do not block session completion. |
+
+---
+
+#### Continuous KB Enrichment — Inline `[KB+]` Annotations
+
+| # | Area | Change |
+|---|------|--------|
+| 1 | KB — Live annotation protocol | **Agents annotate during active work, not just at session end.** Any agent who discovers a business rule, architecture insight, pattern, or regression risk while doing code exploration, investigation, fix development, or review emits a `[KB+]` marker inline in their output at the point of discovery. Format: `[KB+ BIZ]`, `[KB+ ARCH]`, `[KB+ PAT] [NEW/BUMP]`, `[KB+ RISK]`. |
+| 2 | KB — Step 5 annotations | During code location, agents emit `[KB+ ARCH]` for class hierarchy / ownership discoveries and `[KB+ RISK]` for widely-coupled classes or methods identified in the file map. |
+| 3 | KB — Step 7 annotations | Each panel member has a defined annotation responsibility: Alex emits risk and arch from git history; Sam emits business rules from data flow; Jordan emits pattern matches (NEW/BUMP) for every hit in the 20-pattern checklist; Riley emits risks and business rules from her impact assessment. |
+| 4 | KB — Review mode annotations | Same `[KB+]` protocol applies during Steps R4/R5. Each reviewer (Alex, Sam, Jordan, Riley) annotates inline with the same marker types, specific to what the diff reveals. |
+| 5 | KB — Step 13a / R9a collection | Step 13a and R9a now collect `[KB+]` markers from the **full session output** (all steps) as the primary source, alongside structured session extracts as a fallback. Morgan de-duplicates before writing. Nothing discovered during the session is lost. |
+
+---
+
+#### Morgan's JIRA Historical Investigation — New Feature
+
+| # | Area | Change |
+|---|------|--------|
+| 1 | Step 7b — JIRA historical search | **Morgan searches JIRA before every engineering panel briefing.** Runs two JQL queries — component match + label match, status Closed/Resolved/Done — to find past tickets on the same area. Surfaces prior root cause analysis, fix locations, and regression warnings. |
+| 2 | Step 7b — Historical Precedents block | Results are presented to the full panel as a **Historical JIRA Precedents** block before investigation begins. Each past ticket shows: status, root cause (if documented in comments), fix area (file:method), and relevance rating (High/Medium/Low). |
+| 3 | Step 7b — Team guidance | If a highly relevant past fix is found, Morgan immediately directs the team: "IV-XXXX is directly relevant — Alex, find that commit. Jordan, Pattern #2 was the culprit — confirm or rule out first." If no past tickets found, the team proceeds fresh with no interruption. |
+| 4 | Step 7b — KB contribution | Morgan emits `[KB+ BIZ]` and `[KB+ ARCH]` markers for any business knowledge discovered in the historical JIRA tickets that is not already in the Prior Knowledge block. |
+| 5 | Step R5a — Review mode | **Same JIRA historical search runs in Review Mode** before the review panel briefing (Step R5a). Morgan presents the Historical Precedents block so reviewers know whether the diff addresses a known recurring issue. |
+
+---
 
 #### PR Review Mode — New Mode
 

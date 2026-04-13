@@ -10,13 +10,504 @@ Full end-to-end developer onboarding workflow for V1 Jira tickets. Guides Claude
 
 ## Configuration
 
-Before executing any step, resolve the following variable by running `echo $HOME` via Bash:
+Before executing any step, resolve the following variables by running `echo $HOME` via Bash:
 
 ```
-REPO_DIR = $HOME/git/insight
+REPO_DIR       = $HOME/git/insight
+
+KB_MODE        = ${PREVOIR_KB_MODE:-local}
+                 ┌─ local        → KNOWLEDGE_DIR = ${PREVOIR_KNOWLEDGE_DIR:-$HOME/Documents/Prevoir/KnowledgeBase}
+                 └─ distributed  → KNOWLEDGE_DIR = ${PREVOIR_KB_LOCAL_CLONE:-$HOME/.prevoir/kb}
+
+PREVOIR_KB_REPO        = (required when KB_MODE=distributed — URL of the team's dedicated private KB repository)
+                          e.g.  git@bitbucket.org:mycompany/prevoir-kb.git
+                                https://github.com/mycompany/prevoir-kb.git
+PREVOIR_KB_LOCAL_CLONE = (optional — local clone path for the KB repo; default: $HOME/.prevoir/kb)
+PREVOIR_KB_KEY         = (optional when KB_MODE=distributed — AES-256-CBC passphrase for defense-in-depth
+                          encryption; omit to push plain Markdown to the private repo)
 ```
 
-Use `REPO_DIR` wherever the repository path is referenced throughout this skill.
+**`KB_MODE=local` (default):** KB lives in the developer's home directory. No git sync. No encryption. Private to one machine.
+
+**`KB_MODE=distributed`:** KB lives in a dedicated **private** git repository owned and controlled by the team (`PREVOIR_KB_REPO`). The repo is cloned locally at `PREVOIR_KB_LOCAL_CLONE`. KB access is governed by the repo's own permissions — a company Bitbucket, GitHub Enterprise, or GitLab instance ensures only authorised team members can read or write the knowledge base. No sensitive data is ever pushed to any public repository. If `PREVOIR_KB_KEY` is also set, all files are AES-256-CBC encrypted before each push, adding a defense-in-depth layer. If `PREVOIR_KB_KEY` is not set, plain Markdown is pushed directly — acceptable when the repo's access controls are sufficient.
+
+Use `REPO_DIR` wherever the V1 repository path is referenced.
+Use `KNOWLEDGE_DIR` wherever the knowledge base path is referenced.
+Use `KB_MODE` to conditionally execute sync and encryption steps.
+
+---
+
+## Knowledge Base
+
+The knowledge base is a shared, persistent store that grows richer after every Dev and Review session. Retrieval is grep on plain Markdown — near-instant, no external dependencies. The storage and distribution model is controlled by `KB_MODE` (defined in Configuration).
+
+### Storage Modes
+
+| Mode | KB location on disk | Distribution | Access control | Encryption | Agent read/write path |
+|------|--------------------|--------------|-----------------|-----------|-----------------------|
+| **local** (default) | `KNOWLEDGE_DIR` (`$HOME/Documents/Prevoir/KnowledgeBase/`) | None — one machine only | Local filesystem | None | `KNOWLEDGE_DIR` directly |
+| **distributed** | `KNOWLEDGE_DIR` (local clone of `PREVOIR_KB_REPO`) | Via git push/pull to the team's private KB repository | Private repo permissions (Bitbucket, GitHub Enterprise, GitLab, etc.) | Optional AES-256-CBC (`.md.enc` files) | `KNOWLEDGE_DIR` or `/tmp/prevoir-kb-{PID}/` if encrypted |
+
+**`KB_WORK_DIR`** — the path agents use for all KB reads and writes during a session:
+```
+KB_WORK_DIR = (KB_MODE=local)                            → {KNOWLEDGE_DIR}
+            = (KB_MODE=distributed, no PREVOIR_KB_KEY)   → {KNOWLEDGE_DIR}
+            = (KB_MODE=distributed, PREVOIR_KB_KEY set)  → /tmp/prevoir-kb-{$$}/   ← decrypted session copy
+```
+
+Resolve `KB_WORK_DIR` in Step 0a and use it consistently for every KB read/write operation thereafter.
+
+---
+
+### Encryption Scheme
+
+_(Applies only when `KB_MODE=distributed` **and** `PREVOIR_KB_KEY` is set. Optional — plain Markdown is fine when the KB repository's access controls are sufficient.)_
+
+**When to use:** Enable encryption when you want defense-in-depth — for example, if there is any risk the private repo could be accidentally made public, or company policy requires encrypted secrets at rest.
+
+**Algorithm:** AES-256-CBC with PBKDF2-SHA512 key derivation (310,000 iterations, random 16-byte salt per file). Encrypted files are binary blobs — they appear as garbage when opened without the key. File extension on disk: `.md.enc`.
+
+**Key:** `PREVOIR_KB_KEY` environment variable — never committed to git.
+
+**Encrypt a single file:**
+```bash
+openssl enc -aes-256-cbc -pbkdf2 -iter 310000 -md sha512 \
+  -in  "$KB_WORK_DIR/{file}.md" \
+  -out "$KNOWLEDGE_DIR/{file}.md.enc" \
+  -pass env:PREVOIR_KB_KEY
+```
+
+**Decrypt a single file:**
+```bash
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 310000 -md sha512 \
+  -in  "$KNOWLEDGE_DIR/{file}.md.enc" \
+  -out "$KB_WORK_DIR/{file}.md" \
+  -pass env:PREVOIR_KB_KEY
+```
+
+**Batch decrypt (Step 0a — pull to session temp dir):**
+```bash
+KB_WORK_DIR="/tmp/prevoir-kb-$$"
+mkdir -p "$KB_WORK_DIR/tickets" "$KB_WORK_DIR/shared"
+find "$KNOWLEDGE_DIR" -name "*.md.enc" | while read f; do
+  rel="${f#$KNOWLEDGE_DIR/}"           # e.g. tickets/IV-3672.md.enc
+  out="$KB_WORK_DIR/${rel%.enc}"       # e.g. /tmp/prevoir-kb-$$/tickets/IV-3672.md
+  mkdir -p "$(dirname "$out")"
+  openssl enc -d -aes-256-cbc -pbkdf2 -iter 310000 -md sha512 \
+    -in "$f" -out "$out" -pass env:PREVOIR_KB_KEY 2>/dev/null || \
+    echo "KB_DECRYPT_WARN: ${rel} — skipping (wrong key or corrupted)"
+done
+```
+
+**Batch encrypt (Steps 13f / R9f — write back from session temp dir):**
+```bash
+find "$KB_WORK_DIR" -name "*.md" | while read f; do
+  rel="${f#$KB_WORK_DIR/}"             # e.g. tickets/IV-3672.md
+  out="$KNOWLEDGE_DIR/${rel}.enc"      # e.g. KNOWLEDGE_DIR/tickets/IV-3672.md.enc
+  mkdir -p "$(dirname "$out")"
+  openssl enc -aes-256-cbc -pbkdf2 -iter 310000 -md sha512 \
+    -in "$f" -out "$out" -pass env:PREVOIR_KB_KEY
+done
+# Remove stale .md.enc files whose source .md was deleted during the session
+find "$KNOWLEDGE_DIR" -name "*.md.enc" | while read enc; do
+  rel="${enc#$KNOWLEDGE_DIR/}"
+  src="$KB_WORK_DIR/${rel%.enc}"
+  [ -f "$src" ] || rm -f "$enc"
+done
+```
+
+---
+
+### Security Model
+
+_(Applies to `KB_MODE=distributed`.)_
+
+| Threat | Mitigation |
+|--------|-----------|
+| Unauthorised access to KB content | **Private repository** — access controlled by the team's git server (Bitbucket, GitHub Enterprise, GitLab). Only team members with repo access can read or push. |
+| Accidental public exposure of the repo | **Optional encryption** — if `PREVOIR_KB_KEY` is set, files are AES-256-CBC encrypted; the repo can be made public and no content is readable without the key. |
+| Brute-force key recovery (if encrypted) | PBKDF2-SHA512 at 310,000 iterations per file makes each guess computationally expensive. |
+| Key accidentally committed (if encrypted) | `PREVOIR_KB_KEY` is an env var only; `.md.enc` files contain no key material. |
+| Plaintext KB in session temp dir (if encrypted) | Decrypted files live only in `/tmp/prevoir-kb-{PID}/`; deleted after push (Step 13f/R9f). |
+
+**Primary security boundary:** the private repository's access control. Encryption is additive.
+
+**Never store `PREVOIR_KB_KEY` in any file tracked by git.** Set it only in the developer's shell profile (`~/.zshrc`, `~/.bash_profile`).
+
+---
+
+### Directory Layout
+
+```
+{KNOWLEDGE_DIR}/                        ← KB root (path depends on KB_MODE — see Storage Modes)
+├── PALACE.md   (or PALACE.md.enc)     ← Memory Palace: spatial map + trigger anchors
+├── INDEX.md    (or INDEX.md.enc)      ← master index — one line per entry; grep second
+├── tickets/                            ← per-ticket files (one per analysed / reviewed ticket)
+│   └── IV-XXXX.md  (or .md.enc)
+└── shared/                             ← accumulated team knowledge
+    ├── business-rules.md  (or .md.enc) ← domain invariants discovered across all tickets
+    ├── architecture.md    (or .md.enc) ← class hierarchies, data flows, ownership decisions
+    ├── patterns.md        (or .md.enc) ← recurring bug/fix patterns with frequency counters
+    └── regression-risks.md (or .md.enc)← known fragile areas requiring care on every change
+```
+
+In `KB_MODE=local` all files are plain `.md`. In `KB_MODE=distributed` all files on disk are `.md.enc`; the plain `.md` files exist only in `KB_WORK_DIR=/tmp/prevoir-kb-{PID}/` during the session.
+
+---
+
+### Memory Palace
+
+The Memory Palace is the primary retrieval layer. It uses the **Method of Loci** — each part of the V1 system is a named **Room**; each knowledge entry has a **vivid trigger phrase** that makes it instantly recognisable when an agent reads a ticket. Agents walk the Palace first, before touching INDEX.md.
+
+#### System Map (the loci)
+
+```
+                        ┌──────────────────────┐
+                        │   GWT Frontend       │  ← UI events, panels, RPC callbacks
+                        │   fcfrontend/        │     🖥️  FRONT ROOM
+                        └──────────┬───────────┘
+                                   │ GWT RPC
+                        ┌──────────▼───────────┐
+                        │   Backend API        │  ← REST endpoints, service layer
+                        │   fcbackend/api/     │     🔧 ENGINE ROOM
+                        └──────────┬───────────┘
+                                   │
+              ┌────────────────────┼────────────────────┐
+              │                    │                     │
+   ┌──────────▼──────┐  ┌──────────▼──────┐  ┌──────────▼──────┐
+   │  Case Manager   │  │  Alert Central  │  │  Plugin/Workers  │
+   │  FRAMS / Cases  │  │  FRAMS / Alerts │  │  fcplugin/       │
+   │  🏠 CASE ROOM   │  │  🚨 ALERT ROOM  │  │  ⚙️  WORKER ROOM  │
+   └──────────┬──────┘  └──────────┬──────┘  └──────────┬──────┘
+              └────────────────────┼────────────────────┘
+                                   │
+                        ┌──────────▼───────────┐
+                        │   Database           │  ← Oracle / PostgreSQL schemas
+                        │   fcbuild/scripts/   │     🗄️  VAULT
+                        └──────────────────────┘
+```
+
+#### Room Directory
+
+| Room | System Area | Components / Labels | Enter when ticket mentions… |
+|------|-------------|--------------------|-----------------------------|
+| 🖥️ **FRONT ROOM** | GWT Frontend (`fcfrontend/`) | AlertCentral, CaseManager (UI) | panel refresh, button action, RPC call, screen not updating |
+| 🔧 **ENGINE ROOM** | Backend API (`fcbackend/`) | API, REST, Service | endpoint, service method, response, HTTP |
+| 🏠 **CASE ROOM** | Case Manager / FRAMS | CaseManager, FRAMS, Cases | case status, resolve case, case fields, case actions |
+| 🚨 **ALERT ROOM** | Alert Central / FRAMS | AlertCentral, Alerts, FRAMS | alert state, alert sync, alert resolution, open alerts |
+| ⚙️ **WORKER ROOM** | Plugin / Workers (`fcplugin/`) | Plugin, Worker, Spawner | worker, plugin, spawner, background job, scheduled task |
+| 🗄️ **VAULT** | Database (`fcbuild/scripts/`) | Oracle, PostgreSQL, DB, Schema | SQL, schema, table, column, upgrade script |
+
+#### Trigger Anchors
+
+Each knowledge entry has a **trigger** — a 5–8 word memorable phrase that lets an agent recognise relevance in under one second. Triggers live in `PALACE.md` and are updated when new entries are added.
+
+**PALACE.md format:**
+```markdown
+# Prevoir Memory Palace
+Updated: YYYY-MM-DD | Rooms: 6 | Triggers: N
+
+## 🏠 CASE ROOM  (CaseManager, FRAMS, Cases)
+### Triggers
+| Trigger | KB Entry | Type | File |
+|---------|----------|------|------|
+| "resolve case → must resolve alerts" | BIZ-001 | business-rule | shared/business-rules.md#biz-001 |
+| "flag set, never reset — boolean trap" | PAT-001 | pattern | shared/patterns.md#pat-001 |
+| "resolveCase — four callers watch this" | RISK-001 | regression-risk | shared/regression-risks.md#risk-001 |
+| "pendingAlertResolve drives the chain" | ARCH-001 | architecture | shared/architecture.md#arch-001 |
+| "flag removed in cleanup — IV-3672" | IV-3672 | bug-fix | tickets/IV-3672.md |
+
+## 🚨 ALERT ROOM  (AlertCentral, FRAMS, Alerts)
+### Triggers
+| Trigger | KB Entry | Type | File |
+|---------|----------|------|------|
+| "resolve case → must resolve alerts" | BIZ-001 | business-rule | shared/business-rules.md#biz-001 |
+| "resolveAlertCentral — shared by 3 screens" | RISK-002 | regression-risk | shared/regression-risks.md#risk-002 |
+
+## 🖥️ FRONT ROOM  (GWT Frontend, fcfrontend)
+### Triggers
+...
+
+## 🔧 ENGINE ROOM  (Backend API, fcbackend)
+### Triggers
+...
+
+## ⚙️ WORKER ROOM  (Plugin, Workers, fcplugin)
+### Triggers
+...
+
+## 🗄️ VAULT  (Database, fcbuild/scripts)
+### Triggers
+...
+```
+
+Note: A trigger may appear in multiple rooms if the knowledge spans components (e.g. BIZ-001 "resolve case → must resolve alerts" appears in both CASE ROOM and ALERT ROOM).
+
+#### How Agents Use the Palace
+
+1. **Map the ticket to rooms** — from the ticket's components and labels, identify which Room(s) apply using the Room Directory table above.
+2. **Scan triggers** — read only the `### Triggers` table for the matched room(s). This takes one read per room, ~5 lines each.
+3. **Recognise matches** — any trigger that is relevant to the current ticket is a hit. Follow its `File` link.
+4. **Read the matched entry** — grep the file for the section anchor, read ±40 lines.
+5. **Fall through to INDEX.md** — if the Palace yields no matches, grep `INDEX.md` directly by component/label keyword as a fallback.
+
+**This two-layer retrieval (Palace triggers → INDEX fallback) means agents spend ≤ 3 read operations to surface all relevant prior knowledge, even as the KB grows to hundreds of entries.**
+
+---
+
+### INDEX.md Format
+
+`INDEX.md` is the fallback lookup layer and the authoritative list of all entries. Every entry has exactly one row here.
+
+```markdown
+# Prevoir Knowledge Base — Master Index
+Updated: YYYY-MM-DD | Ticket entries: N | Shared entries: N
+
+## Ticket Entries
+| Ticket | Date | Type | Components | Labels | Summary | File |
+|--------|------|------|------------|--------|---------|------|
+| IV-3672 | 2026-03-10 | bug-fix | CaseManager | FRAMS | Boolean flag not reset — alerts stay open after case resolve | tickets/IV-3672.md |
+| IV-3695 | 2026-04-01 | enhancement | AlertCentral | FRAMS | New bulk-resolve endpoint added to AlertService | tickets/IV-3695.md |
+
+## Shared Knowledge Entries
+| KB-ID | Domain | Date | Type | Trigger | File | Section |
+|-------|--------|------|------|---------|------|---------|
+| BIZ-001 | Case Management | 2026-03-10 | business-rule | resolve case → must resolve alerts | shared/business-rules.md | #biz-001 |
+| ARCH-001 | CaseManager | 2026-03-10 | architecture | pendingAlertResolve drives the chain | shared/architecture.md | #arch-001 |
+| PAT-001 | Boolean Flag | 2026-03-10 | pattern | flag set, never reset — boolean trap | shared/patterns.md | #pat-001 |
+| RISK-001 | Alert Sync | 2026-03-10 | regression-risk | resolveCase — four callers watch this | shared/regression-risks.md | #risk-001 |
+```
+
+Note the `Trigger` column — it matches the trigger phrases in `PALACE.md`. This ensures `INDEX.md` keyword search and Palace trigger recognition surface the same entries.
+
+### Ticket Entry File Format (`tickets/IV-XXXX.md`)
+
+```markdown
+---
+ticket: IV-XXXX
+date: YYYY-MM-DD
+type: bug-fix | enhancement | bug-fix-reviewed | enhancement-reviewed
+version: {skill version}
+components: {comma-separated list}
+labels: {comma-separated list}
+rooms: {palace rooms this ticket maps to — e.g. "CASE ROOM, ALERT ROOM"}
+verdict: {Approved / Request Changes / N/A}
+summary: {one-line summary}
+trigger: {5–8 word memorable trigger phrase for PALACE.md}
+---
+
+## Problem
+{one paragraph — what was broken or missing}
+
+## Root Cause / Enhancement Statement
+{verbatim from Step 7i or Step 7-ENH-d}
+
+## Fix / Change Applied
+{what was changed and why — file:line references}
+
+## Business Rules Discovered
+{bulleted list of new business rules identified during this session — or "None"}
+
+## Architecture Insights
+{new understanding of system structure, class hierarchies, or data flows — or "None"}
+
+## Patterns Observed
+{recurring patterns seen in this ticket — Jordan pattern number if applicable — or "None"}
+
+## Regression Risks Added
+{new fragile areas identified — or "None"}
+
+## Related Tickets
+{list of linked tickets and relevance — or "None"}
+```
+
+### Shared Knowledge Files Format
+
+Each shared file accumulates entries chronologically. Every entry has:
+- An anchor (`{#id}`) matching its INDEX.md row
+- A **trigger phrase** in the heading (used in PALACE.md)
+- A source ticket, date, and confirmation history
+
+**`shared/business-rules.md` entry format:**
+```markdown
+## BIZ-001 — "resolve case → must resolve alerts" {#biz-001}
+Date: 2026-03-10 | Source: IV-3672 | Rooms: CASE ROOM, ALERT ROOM
+Confirmed by: IV-3801 (review, 2026-04-02)
+
+When a case transitions to RESOLVED, all open alerts associated with that case must
+also be resolved. The system achieves this via the `pendingAlertResolve` flag in
+`CaseManager` — if not set before the save callback, the alert resolution chain is
+silently skipped.
+
+**Rule:** Every code path that resolves a case must set `pendingAlertResolve = true`
+before calling the save service.
+```
+
+**`shared/patterns.md` entry format:**
+```markdown
+## PAT-001 — "flag set, never reset — boolean trap" {#pat-001}
+Date: 2026-03-10 | Source: IV-3672 | Rooms: CASE ROOM | Frequency: 2
+Jordan — Pattern #2 (Boolean Flag Not Reset)
+
+Boolean flags in `CaseManager` are set on one path (resolve) but not reset on
+complementary paths (cancel, error, re-open). This is Jordan's Pattern #2 recurring
+in this class.
+
+**Watch:** Any Boolean flag added or modified in `CaseManager` — verify all
+complementary paths explicitly before submitting the fix.
+
+**Recurrences:** IV-3672 (2026-03-10), IV-3810 (2026-04-05)
+```
+
+### Retrieval Rules
+
+1. **Palace first** — read `PALACE.md`, find the room(s) for the ticket's components/labels, scan triggers. This is always ≤ 3 read operations regardless of KB size.
+2. **INDEX.md as fallback** — if Palace yields no matches, grep `INDEX.md` by component, label, and ticket key.
+3. **Read only matched files** — never read a full shared file; grep for the section anchor, then read ±40 lines.
+4. **Max 5 ticket entries** — if more than 5 ticket entries match, take the 5 most recent by date.
+5. **All matching shared entries** — business rules, patterns, risks matching the query are always included.
+6. **Never block on empty KB** — absence of prior knowledge is not an error; initialise and proceed.
+
+### Update Rules
+
+1. **Always write `tickets/IV-XXXX.md`** at the end of every Dev and Review session.
+2. **Always update `PALACE.md`** — add the new ticket's trigger to the relevant room(s); add new shared entry triggers to matched rooms; increment frequency in patterns.
+3. **Append to shared files only for genuinely new knowledge** — check existing entries before appending; never duplicate.
+4. **Update `INDEX.md`** — add/update rows for every written entry; update counts and date.
+5. **Bump pattern frequency** — when an existing pattern recurs, increment `Frequency: N` and append the ticket to Recurrences.
+6. **Confirm business rules** — when a review session validates an existing rule, add `Confirmed by:` to the entry rather than creating a duplicate.
+
+### KB Live Annotation Protocol
+
+**Agents do not wait until Step 13/R9 to generate knowledge.** Business rules, architecture insights, patterns, and risks are discovered continuously — during code exploration (Step 5), investigations (Step 7), fix development (Step 8), impact search (Step 9), and code review (Step R4/R5). These must be captured as they arise so nothing is lost and the KB reflects everything the session actually learned.
+
+#### Inline `[KB+]` Marker
+
+Any agent who discovers new business knowledge during their work **must** emit a `[KB+]` annotation inline in their output at the point of discovery. Format:
+
+```
+[KB+ BIZ]  {domain rule or invariant} — Source: {file:line or ticket}
+[KB+ ARCH] {class/component insight, data flow, ownership} — {file:line}
+[KB+ PAT]  Pattern #{N}: {description} — {file:line}  [NEW or BUMP]
+[KB+ RISK] {area / method / class} is fragile — {reason}
+```
+
+**When to emit:**
+| Agent | Emit `[KB+]` when… |
+|-------|---------------------|
+| **Morgan** | A business rule is stated or confirmed; a historical precedent is found in JIRA (Step 7b) |
+| **Alex** | A regression-inducing commit is found; a historical coupling or breaking change is identified via git history |
+| **Sam** | A domain invariant is implied by the data flow (e.g. "flag X must be set before service Y runs"); a new component interaction is discovered |
+| **Jordan** | A pattern from the 20-pattern checklist is matched — `NEW` if first occurrence, `BUMP` if already in KB |
+| **Riley** | A fragile area or edge case is uncovered during impact assessment; a test coverage gap is identified |
+
+**What is worth flagging:**
+- A domain rule that is implied by the code but not written anywhere (e.g. "resolving a case must also resolve its alerts")
+- An architecture decision visible from the code (e.g. "AbstractXxxListener owns config; concrete subclass only wires it")
+- A pattern that recurs (Jordan's 20 patterns)
+- A regression risk: a method, class, or area where a change will silently break something else
+- A historical coupling discovered via git blame or git log
+
+**What is NOT worth flagging:** implementation details that are obvious from reading the code, standard Java conventions, or anything already in the Prior Knowledge block from Step 0b.
+
+#### Session KB Collection
+
+Step 13a/R9a collect all `[KB+]` markers from the session output (all steps) alongside the structured sources already listed. A `[KB+]` marker is treated as a candidate entry — Morgan confirms it before writing to avoid noise.
+
+---
+
+### External Knowledge Sources
+
+The knowledge base is augmented by two live external sources that are queried during Step 0b (alongside the local KB) to provide additional context before analysis begins:
+
+| Source | URL | What to query | When to use |
+|--------|-----|--------------|-------------|
+| **Confluence** | `https://prevoirsolutions.atlassian.net/wiki/x/uACUAw` | Business requirements, functional specs, known limitations, feature documentation | Before Step 2 — search for the ticket's component or label to find any spec pages |
+| **Bitbucket / V1 Source** | `https://bitbucket.org/prevoirsolutionsinformatiques/insight` (`development` branch) | Live source code, recent commit history, current class state | Before Step 5 — cross-check the KB's file:line references against the live development branch to confirm they are still current |
+
+#### Confluence Query (Step 0b — External Layer 1)
+
+Use `mcp__plugin_atlassian_atlassian__searchConfluenceUsingCql` or `mcp__plugin_atlassian_atlassian__getConfluencePage` to search for pages relevant to the ticket:
+
+```
+CQL: space = "V1" AND text ~ "{COMPONENT}" AND text ~ "{LABEL}" ORDER BY lastmodified DESC
+```
+
+For each page found:
+- Extract any acceptance criteria, business rules, or known limitations that relate to the current ticket
+- Note the page title and URL as a source reference
+- Carry relevant findings into the **Prior Knowledge** block under a `CONFLUENCE` section
+- If a page directly contradicts or extends a KB business rule, flag the discrepancy
+
+If no matching Confluence pages are found, state: "Confluence: no pages found for these terms."
+
+#### Bitbucket Cross-Check (Step 0b — External Layer 2)
+
+When the KB contains `file:line` references for the matched components, verify they are still current against the live `development` branch before the investigation team acts on them:
+
+```
+URL pattern: https://bitbucket.org/prevoirsolutionsinformatiques/insight/src/development/{file_path}
+```
+
+For each KB entry that cites a specific `file:line`:
+1. Confirm the class/method at that line still exists (a quick read of the relevant file range via the Bitbucket source URL, or via local `git show origin/development:{file}`)
+2. If a KB entry's file:line is stale (class moved, method renamed), flag it: `⚠️ KB entry {ID} may be stale — {file:line} not found on development branch`
+3. Do not update the KB entry during Step 0 — flag it and let Step 13/R9 update it with the correct location after the investigation confirms it
+
+The Bitbucket cross-check is **best-effort**: if the repository is not accessible or the file cannot be found quickly (> 2 targeted reads), skip and proceed with `⚠️ Bitbucket cross-check skipped — verify {file:line} references manually during Step 5.`
+
+### Git Sync Rules
+
+_(Applies only when `KB_MODE=distributed`. Skip entirely when `KB_MODE=local` — no git operations are performed on the KB.)_
+
+The distributed knowledge base lives in a **dedicated private git repository** (`PREVOIR_KB_REPO`) owned and controlled by the team. It is cloned locally at `KNOWLEDGE_DIR`. Because it is a standalone repository — not a branch on the product repo — git operations are straightforward: clone once, pull at session start, push at session end.
+
+**First-time setup (once per developer):**
+```bash
+KB_CLONE="${PREVOIR_KB_LOCAL_CLONE:-$HOME/.prevoir/kb}"
+git clone "$PREVOIR_KB_REPO" "$KB_CLONE"
+mkdir -p "$KB_CLONE/tickets" "$KB_CLONE/shared"
+```
+If `PREVOIR_KB_REPO` does not have any commits yet (new repo), initialise it:
+```bash
+KB_CLONE="${PREVOIR_KB_LOCAL_CLONE:-$HOME/.prevoir/kb}"
+mkdir -p "$KB_CLONE/tickets" "$KB_CLONE/shared"
+cd "$KB_CLONE"
+git init && git remote add origin "$PREVOIR_KB_REPO"
+echo "# Prevoir Knowledge Base" > README.md
+git add README.md && git commit -m "init: create knowledge base repo"
+git push -u origin main
+```
+
+**Pull (Step 0a — before session, distributed mode only):**
+```bash
+KB_CLONE="${PREVOIR_KB_LOCAL_CLONE:-$HOME/.prevoir/kb}"
+if [ -d "$KB_CLONE/.git" ]; then
+  cd "$KB_CLONE" && git pull origin main && \
+    echo "KB: pulled latest from ${PREVOIR_KB_REPO}."
+else
+  git clone "$PREVOIR_KB_REPO" "$KB_CLONE" && \
+    echo "KB: cloned ${PREVOIR_KB_REPO} → ${KB_CLONE}."
+  mkdir -p "$KB_CLONE/tickets" "$KB_CLONE/shared"
+fi
+```
+
+**Push (Steps 13f and R9f — after session, distributed mode only):**
+```bash
+KB_CLONE="${PREVOIR_KB_LOCAL_CLONE:-$HOME/.prevoir/kb}"
+cd "$KB_CLONE"
+git add .
+if ! git diff --cached --quiet; then
+  git commit -m "kb({TICKET_KEY}): {type} — {one-line summary}"
+  git push origin main && echo "KB: pushed to ${PREVOIR_KB_REPO}."
+else
+  echo "KB: no changes to push."
+fi
+```
+
+**If the push fails** (network unavailable, no remote access): log `KB_PUSH_WARN: {reason}` and continue. Changes remain committed in the local clone and can be pushed manually with `git push origin main` from `KNOWLEDGE_DIR`.
+
+**Merge conflicts:** If `git pull` produces a conflict (two developers pushed simultaneously), resolve using `git mergetool` or by accepting the latest version (`git checkout --theirs .`). Prefer keeping both sets of knowledge — append rather than overwrite if possible.
 
 ## Headless Mode
 
@@ -24,6 +515,10 @@ If the environment variable `AUTO_MODE=true` is set, the skill runs in **analysi
 
 | Gate | Interactive behaviour | Headless default |
 |------|-----------------------|-----------------|
+| Step 0 — KB initialisation | Create directory if needed, present Prior Knowledge block | Create directory if needed; present Prior Knowledge block as normal — no interactive element |
+| Step 13 — KB update failure | Warn developer if a write fails | Log `KB_WRITE_WARN: {reason}` and continue — do not block session completion |
+| Step R0 — KB initialisation (Review mode) | Same as Step 0 | Same as Step 0 |
+| Step R9 — KB update failure (Review mode) | Same as Step 13 | Same as Step 13 |
 | Step 1 — MCP failure | Stop and wait for developer | Print `HEADLESS_ERROR: {reason}` and exit immediately |
 | Step 4a — Base branch unconfirmed | Ask developer which branch to use | Default to `development`; note the fallback in output |
 | Step 4c — Branch creation | Run `git checkout -b …` | **Skip** — report the branch name that would be created, run no git commands |
@@ -47,8 +542,8 @@ This skill operates in two modes. Detect the mode from the invocation:
 
 | Mode | Trigger phrases | What runs |
 |------|----------------|-----------|
-| **Dev Mode** | `IV-XXXX`, `start dev on IV-XXXX`, `pick up IV-XXXX`, `/dev IV-XXXX` | Steps 1–12 (full dev workflow → proposed fix → PDF analysis report) |
-| **PR Review Mode** | `review IV-XXXX`, `PR review IV-XXXX`, `code review IV-XXXX`, `/dev review IV-XXXX` | Steps R1–R8 (ticket context + code diff review → PDF review report) |
+| **Dev Mode** | `IV-XXXX`, `start dev on IV-XXXX`, `pick up IV-XXXX`, `/dev IV-XXXX` | **Step 0** (KB query) → Steps 1–12 (full dev workflow → proposed fix → PDF) → **Step 13** (KB update) |
+| **PR Review Mode** | `review IV-XXXX`, `PR review IV-XXXX`, `code review IV-XXXX`, `/dev review IV-XXXX` | **Step R0** (KB query) → Steps R1–R8 (code diff review → PDF) → **Step R9** (KB update) |
 
 **→ If the invocation contains the word `review` before or near the ticket key, enter PR Review Mode. Otherwise enter Dev Mode.**
 
@@ -67,6 +562,220 @@ Do NOT invoke for general code questions unrelated to a Jira ticket.
 ## Workflow Steps
 
 Execute all steps **in order**. Do not skip steps. Present output to the developer as you complete each one.
+
+---
+
+### Step 0 — Knowledge Base: Sync, Initialise & Query
+
+This step runs in two phases. **Phase A** (sync + initialise) runs before Step 1. **Phase B** (query) runs after Step 1 once ticket metadata is available.
+
+#### 0a. Sync & Initialise
+
+##### If `KB_MODE=local` (default):
+
+**Step 1 — Initialise directories (no git sync):**
+```bash
+mkdir -p "$KNOWLEDGE_DIR/tickets" "$KNOWLEDGE_DIR/shared"
+```
+Set `KB_WORK_DIR="$KNOWLEDGE_DIR"`. No git operations.
+
+**Step 2 — Create skeleton files if this is a first run:** _(see common steps below)_
+
+**Step 3 — Report status:** _(see common steps below)_
+
+---
+
+##### If `KB_MODE=distributed`:
+
+**Step 1 — Verify `PREVOIR_KB_REPO` is set:**
+```bash
+if [ -z "$PREVOIR_KB_REPO" ]; then
+  echo "KB_ERROR: PREVOIR_KB_REPO is not set."
+  echo "         Set it to your team's private KB repository URL in your shell profile."
+  echo "         Continuing without knowledge base."
+fi
+```
+If not set, skip all remaining distributed steps and proceed without prior knowledge. Warn the developer prominently.
+
+**Step 2 — Pull from the private KB repository:**
+
+Use the pull command from the **Git Sync Rules** section above. If the local clone does not exist, clone the repo first.
+
+```bash
+KB_CLONE="${PREVOIR_KB_LOCAL_CLONE:-$HOME/.prevoir/kb}"
+if [ -d "$KB_CLONE/.git" ]; then
+  cd "$KB_CLONE" && git pull origin main && \
+    echo "KB: pulled latest from ${PREVOIR_KB_REPO}."
+else
+  git clone "$PREVOIR_KB_REPO" "$KB_CLONE" && \
+    echo "KB: cloned ${PREVOIR_KB_REPO} → ${KB_CLONE}."
+  mkdir -p "$KB_CLONE/tickets" "$KB_CLONE/shared"
+fi
+```
+
+**Step 3 — Set `KB_WORK_DIR`:**
+
+- If `PREVOIR_KB_KEY` is **not set**: `KB_WORK_DIR="$KNOWLEDGE_DIR"` — operate directly on the local clone (plain Markdown).
+- If `PREVOIR_KB_KEY` **is set** (encryption enabled): clean up any prior session temp dirs, then decrypt:
+
+```bash
+# Clean prior temp dirs
+rm -rf /tmp/prevoir-kb-[0-9]* 2>/dev/null
+
+# Decrypt to session temp dir
+KB_WORK_DIR="/tmp/prevoir-kb-$$"
+mkdir -p "$KB_WORK_DIR/tickets" "$KB_WORK_DIR/shared"
+find "$KNOWLEDGE_DIR" -name "*.md.enc" | while read f; do
+  rel="${f#$KNOWLEDGE_DIR/}"
+  out="$KB_WORK_DIR/${rel%.enc}"
+  mkdir -p "$(dirname "$out")"
+  openssl enc -d -aes-256-cbc -pbkdf2 -iter 310000 -md sha512 \
+    -in "$f" -out "$out" -pass env:PREVOIR_KB_KEY 2>/dev/null || \
+    echo "KB_DECRYPT_WARN: ${rel} — skipping (wrong key or corrupted)"
+done
+enc_count=$(find "$KNOWLEDGE_DIR" -name "*.md.enc" 2>/dev/null | wc -l | tr -d ' ')
+echo "KB: decrypted ${enc_count} encrypted files → ${KB_WORK_DIR}/"
+```
+
+**Step 4 — Create skeleton files if this is a first run:** _(see common steps below)_
+
+**Step 5 — Report status:** _(see common steps below)_
+
+---
+
+##### Common steps (both modes — operate on `KB_WORK_DIR`):
+
+**Create skeleton files if this is a first run:**
+
+If `PALACE.md` does not exist, create:
+```markdown
+# Prevoir Memory Palace
+Updated: {today} | Rooms: 6 | Triggers: 0
+
+## 🏠 CASE ROOM  (CaseManager, FRAMS, Cases)
+### Triggers
+| Trigger | KB Entry | Type | File |
+|---------|----------|------|------|
+
+## 🚨 ALERT ROOM  (AlertCentral, FRAMS, Alerts)
+### Triggers
+| Trigger | KB Entry | Type | File |
+|---------|----------|------|------|
+
+## 🖥️ FRONT ROOM  (GWT Frontend, fcfrontend)
+### Triggers
+| Trigger | KB Entry | Type | File |
+|---------|----------|------|------|
+
+## 🔧 ENGINE ROOM  (Backend API, fcbackend)
+### Triggers
+| Trigger | KB Entry | Type | File |
+|---------|----------|------|------|
+
+## ⚙️ WORKER ROOM  (Plugin, Workers, fcplugin)
+### Triggers
+| Trigger | KB Entry | Type | File |
+|---------|----------|------|------|
+
+## 🗄️ VAULT  (Database, fcbuild/scripts)
+### Triggers
+| Trigger | KB Entry | Type | File |
+|---------|----------|------|------|
+```
+
+If `INDEX.md` does not exist, create the skeleton header (see INDEX.md Format above).
+If any `shared/*.md` file does not exist, create it with a title-only header.
+
+**Step 4 — Report status:**
+
+```
+KB: {KNOWLEDGE_DIR}
+    Ticket entries : {N}
+    Shared entries : {M}
+    Palace triggers: {P}
+    Last updated   : {date from INDEX.md header or "new"}
+```
+
+#### 0b. Query (runs after Step 1 — ticket metadata available)
+
+Once Step 1 has returned the ticket's **components** and **labels**, query in two layers:
+
+**Layer 1 — Memory Palace (primary, fast path):**
+
+1. Read `PALACE.md`.
+2. Using the Room Directory table, identify which room(s) match the ticket's components and labels.
+3. For each matched room, read its `### Triggers` table (≤ 10 lines per room).
+4. Any trigger that is semantically relevant to this ticket's topic is a **hit** — note its `KB Entry` and `File`.
+5. Read the full entry for each hit (grep for the section anchor in the linked file, read ±40 lines).
+
+**Layer 2 — INDEX.md fallback (if Palace yields no matches):**
+
+```bash
+grep -i "{COMPONENT}" "$KNOWLEDGE_DIR/INDEX.md"
+grep -i "{LABEL}"     "$KNOWLEDGE_DIR/INDEX.md"
+grep -i "{TICKET_KEY}" "$KNOWLEDGE_DIR/INDEX.md"
+```
+
+Read the 5 most recent matching ticket entries and all matching shared entries.
+
+**Present the Prior Knowledge block before Step 2:**
+
+```
+┌─ Knowledge Base — Prior Knowledge ──────────────────────────────┐
+│ Rooms matched   : {e.g. 🏠 CASE ROOM, 🚨 ALERT ROOM}             │
+│ Triggers matched: {N}  |  Ticket history: {N}  |  Shared: {M}    │
+│                                                                   │
+│ TICKET HISTORY                                                    │
+│ ─────────────────────────────────────────────────────────────────│
+│ [IV-XXXX] ({date}) {type} — {one-line summary}                   │
+│   Root cause : {root cause one-liner}                            │
+│   Files      : {primary files affected}                          │
+│   Lesson     : {lesson learned}                                  │
+│                                                                   │
+│ BUSINESS RULES (🔑 memorise these)                               │
+│ ─────────────────────────────────────────────────────────────────│
+│ [BIZ-001] "resolve case → must resolve alerts"                   │
+│           {one-line rule body}                                   │
+│                                                                   │
+│ ARCHITECTURE NOTES                                               │
+│ ─────────────────────────────────────────────────────────────────│
+│ [ARCH-001] "pendingAlertResolve drives the chain"                │
+│           {one-line insight}                                     │
+│                                                                   │
+│ RECURRING PATTERNS (⚠️ seen before)                              │
+│ ─────────────────────────────────────────────────────────────────│
+│ [PAT-001] "flag set, never reset — boolean trap" (seen {N}×)     │
+│           {one-line description}                                 │
+│                                                                   │
+│ REGRESSION RISKS                                                  │
+│ ─────────────────────────────────────────────────────────────────│
+│ [RISK-001] "resolveCase — four callers watch this"               │
+│           {one-line risk}                                        │
+│                                                                   │
+│ CONFLUENCE                                                        │
+│ ─────────────────────────────────────────────────────────────────│
+│ [{Page title}] — {URL}                                           │
+│   {one-line summary of relevant content found}                   │
+│   {any rule or constraint that extends or conflicts with KB}     │
+│                                                                   │
+│ BITBUCKET CROSS-CHECK                                            │
+│ ─────────────────────────────────────────────────────────────────│
+│ {file:line references verified: N current / M stale}             │
+│ {⚠️ KB-XXX stale: {file:line} not found on development — verify} │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+If no local KB entries and no Confluence results: `Prior knowledge: none found — starting fresh.`
+If Confluence is unreachable: omit the CONFLUENCE section and note `Confluence: unavailable.`
+If Bitbucket cross-check skipped: note `Bitbucket: skipped — verify file:line refs in Step 5.`
+
+**Carry the Prior Knowledge block forward — it is mandatory context for:**
+- Step 2: does KB confirm or extend the problem description and acceptance criteria?
+- Step 5: KB may already have the relevant `file:line` — use it before grepping the codebase
+- Step 7: Morgan must explicitly state whether KB history informs the investigation direction
+- Step 8: KB may have a proven fix pattern — build on it rather than starting from scratch
+
+---
 
 ---
 
@@ -359,6 +1068,15 @@ After building the file map, assess your certainty:
 
 State the confidence level explicitly: `File map confidence: High — proceeding.`
 
+#### KB Annotations — Step 5
+
+While building the file map, emit `[KB+]` markers for any architecture or business knowledge discovered:
+- `[KB+ ARCH]` — whenever a class hierarchy, ownership rule, or layer interaction is confirmed (e.g. "AbstractXxxListener owns shared config; concrete subclasses only wire `getConfig()`")
+- `[KB+ BIZ]` — whenever the code implies a domain invariant not stated in the ticket (e.g. "saving a case also triggers alert resolution via the `pendingAlertResolve` flag")
+- `[KB+ RISK]` — whenever a widely-coupled class or method is identified in the file map (e.g. "resolveCase() is called from 4 different screens")
+
+These annotations are collected in Step 13a alongside the Panel's `[KB+]` markers.
+
 ---
 
 ### Step 6 — Replicate the Issue
@@ -530,36 +1248,98 @@ Engineers (Alex, Sam, Jordan) are competing for the **Best Analysis** distinctio
 
 ---
 
-#### 7b. Morgan Opens — Lead Briefing (1-minute block)
+#### 7b. Morgan Opens — Historical JIRA Search + Lead Briefing
 
-Morgan reads the ticket summary, the file map from Step 5, the replication guide from Step 6, and the decision tree classification. Morgan then opens the session:
+Before briefing the team, Morgan performs a mandatory JIRA historical investigation to determine whether this issue — or a closely related one — has been encountered and resolved before. Prior resolutions may contain root cause analysis, fix locations, or regression notes that the team can immediately build on.
+
+##### 7b-i. Morgan's JIRA Historical Search
+
+Morgan runs the following JQL queries using `mcp__jira__jira_search` or `mcp__plugin_atlassian_atlassian__searchJiraIssuesUsingJql`:
 
 ```
-┌─ Morgan — Lead Briefing ────────────────────────────────────────┐
-│ Ticket     : {TICKET_KEY} — {summary}                            │
-│ Classification: {Decision tree path}                             │
-│ Primary suspect area: {file:line or layer identified in Step 5}  │
-│                                                                  │
-│ Team assignments:                                                │
-│   Alex  → Focus on git history of {primary_file}. Flag anything │
-│            touched in the last 90 days near {method/class}.      │
-│   Sam   → Trace from {entry_point} down. Find the divergence.   │
-│   Jordan → Run your pattern checklist. Decision tree says        │
-│            {classification}, so lead with patterns {X, Y, Z}.   │
-│   Riley → Map the test surface. Identify affected user flows,    │
-│            edge cases the engineers may miss, and flag any        │
-│            testability concern with the suspected fix direction.  │
-│                                                                  │
-│ Schedule:                                                        │
-│   T+2 min : Mid-point check-in (all four report progress)       │
-│   T+4 min : Final hypotheses + Riley's assessment due            │
-│   T+5 min : Riley's questions + Morgan's cross-examination       │
-│   T+6 min : Debate round + my verdict                           │
-│                                                                  │
-│ Rules: Evidence only. File:line or commit references required.   │
-│ Riley — your concerns carry weight. Flag anything that would     │
-│ make this fix untestable or hide a regression.                   │
-└────────────────────────────────────────────────────────────────────┘
+-- Query 1: Same component(s), closed/resolved, keyword match on current summary
+project = IV
+AND component in ("{COMPONENTS}")
+AND status in (Done, Resolved, Closed)
+AND summary ~ "{KEY_TERM_1}" OR summary ~ "{KEY_TERM_2}"
+ORDER BY updated DESC
+
+-- Query 2: Same label(s), closed/resolved — broader net
+project = IV
+AND labels in ("{LABELS}")
+AND status in (Done, Resolved, Closed)
+ORDER BY updated DESC
+```
+
+Limit to 10 results per query. For each ticket returned:
+1. Retrieve full details (summary, description, comments, resolution note, assignee, fix version).
+2. Scan comments for: root cause statements, file:line references to the fix, investigation notes, known regressions introduced by the fix.
+3. Classify relevance: **High** (same component + same symptom), **Medium** (same component, different symptom), **Low** (related label only).
+4. Emit `[KB+ BIZ]` or `[KB+ ARCH]` markers for any business rule or architecture insight discovered in the historical tickets that is not already in the Prior Knowledge block.
+
+Present the Historical JIRA Precedents block before the team briefing:
+
+```
+┌─ Morgan — Historical JIRA Precedents ────────────────────────────────┐
+│ Searched  : component={COMPONENTS}, label={LABELS}, status=Closed    │
+│ Found     : {N} related past ticket(s)                               │
+│                                                                      │
+│ [IV-XXXX] ({date}) {summary}  — Relevance: High/Medium/Low          │
+│   Status   : {Closed/Resolved} | Fix version: {version}             │
+│   Root cause (from comments): {one-line summary or "Not documented"} │
+│   Fix area : {file:method:line if mentioned, else "Not documented"}  │
+│   Risk note: {any regression warning from comments or "None"}        │
+│                                                                      │
+│ [IV-YYYY] ...                                                        │
+│                                                                      │
+│ Team note: {one of:}                                                 │
+│   "IV-XXXX is directly relevant — Alex/Jordan, start from that fix." │
+│   "Past tickets found but no documented root cause — fresh start."   │
+│   "No past tickets found on these components/labels."                │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+If JIRA search fails (MCP unavailable): log `JIRA_SEARCH_WARN: historical search unavailable` and continue. Do not block the session.
+
+If no matching tickets are found: state "No historical tickets found on these components/labels — proceeding fresh."
+
+##### 7b-ii. Morgan Lead Briefing (1-minute block)
+
+Morgan reads the ticket summary, the file map from Step 5, the replication guide from Step 6, the decision tree classification, the Prior Knowledge block (Step 0b), and the Historical JIRA Precedents above. Morgan then opens the session:
+
+```
+┌─ Morgan — Lead Briefing ────────────────────────────────────────────┐
+│ Ticket     : {TICKET_KEY} — {summary}                               │
+│ Classification: {Decision tree path}                                │
+│ Primary suspect area: {file:line or layer identified in Step 5}     │
+│ Prior KB   : {N triggers matched / "none — fresh start"}            │
+│ JIRA history: {N past tickets / "none found"}                       │
+│                                                                     │
+│ Team assignments:                                                   │
+│   Alex  → Focus on git history of {primary_file}. Flag anything    │
+│            touched in the last 90 days near {method/class}.         │
+│            {If relevant past ticket: "Check IV-XXXX fix commit."}   │
+│   Sam   → Trace from {entry_point} down. Find the divergence.      │
+│   Jordan → Run your pattern checklist. Decision tree says           │
+│            {classification}, so lead with patterns {X, Y, Z}.      │
+│            {If KB has prior pattern: "PAT-00N seen N× — confirm."}  │
+│   Riley → Map the test surface. Identify affected user flows,       │
+│            edge cases the engineers may miss, and flag any           │
+│            testability concern with the suspected fix direction.     │
+│                                                                     │
+│ KB annotations: emit [KB+] markers inline whenever you discover a   │
+│ business rule, architecture insight, pattern, or regression risk.   │
+│                                                                     │
+│ Schedule:                                                           │
+│   T+2 min : Mid-point check-in (all four report progress)          │
+│   T+4 min : Final hypotheses + Riley's assessment due               │
+│   T+5 min : Riley's questions + Morgan's cross-examination          │
+│   T+6 min : Debate round + my verdict                              │
+│                                                                     │
+│ Rules: Evidence only. File:line or commit references required.      │
+│ Riley — your concerns carry weight. Flag anything that would        │
+│ make this fix untestable or hide a regression.                      │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -594,6 +1374,8 @@ Operations (in priority order — stop early if High confidence is reached):
 7. Cross-reference suspect commit date with related Jira tickets in comments
 8. Confirm fix path is clear of conflicting in-progress changes on the branch
 
+**Alex KB annotations:** Emit `[KB+ RISK]` for any widely-coupled area found via git blame. Emit `[KB+ ARCH]` if git history reveals an architectural decision (e.g. "this class was split in commit X because Y"). Emit `[KB+ BIZ]` if a commit message or JIRA cross-reference reveals a business rule that drove a past change.
+
 ---
 
 **Sam — Data Flow & Runtime Logic**
@@ -614,6 +1396,8 @@ Additional Sam checks at every hop:
 - Method return value silently discarded?
 - Conditional branch short-circuits before the critical operation executes?
 - Service method calling a deprecated path instead of the updated one?
+
+**Sam KB annotations:** Emit `[KB+ BIZ]` for every domain invariant implied by the data flow (e.g. "field X must be set before service Y is called"). Emit `[KB+ ARCH]` when a new layer interaction is discovered (e.g. "plugin workers communicate back to FRAMS via event bus, not direct call"). Emit `[KB+ RISK]` when a widely-used service method or shared state is identified as a potential regression point.
 
 ---
 
@@ -647,6 +1431,8 @@ Jordan checks patterns in priority order driven by the decision tree classificat
 
 Priority order by classification: UI issues → {1, 2, 3, 4}; Data issues → {1, 5, 6, 9, 12, 13}; Async issues → {3, 7, 10}; Regressions → {2, 8, 17, 18}; Enhancements → {11, 7, 16}; Architecture → {14, 15, 19, 20}.
 
+**Jordan KB annotations:** For every pattern match: emit `[KB+ PAT] Pattern #{N}: {description} — {file:line} [NEW]` on first occurrence or `[KB+ PAT] Pattern #{N}: {description} — {file:line} [BUMP]` if already in KB. If a structural anti-pattern (wrong ownership level, circular dependency, leaking abstraction) reveals an architecture insight: also emit `[KB+ ARCH]`.
+
 ---
 
 **Riley — Testing Impact & Regression Assessment**
@@ -661,6 +1447,8 @@ Operations (in priority order — stop when impact picture is clear):
 6. Assess the regression surface: list existing behaviours that the proposed fix direction could silently break — focus on shared utilities, common service methods, and anything called by more than one screen
 
 Riley does **not** assert a root cause. Riley asserts impact, risk, and testability.
+
+**Riley KB annotations:** Emit `[KB+ RISK]` for every area identified as fragile (shared methods, widely-used utilities, cross-screen state). Emit `[KB+ BIZ]` if an acceptance criterion implies a domain rule (e.g. "system must not allow X in state Y"). These become regression risk and business rule entries in the KB.
 
 ---
 
@@ -1695,6 +2483,150 @@ Then end with:
 
 ---
 
+### Step 13 — Knowledge Base: Record Learnings
+
+After Step 12 confirms the PDF has been saved, update the knowledge base with everything learned during this session. This step makes the team smarter for the next ticket.
+
+#### 13a. Identify What Is Worth Recording
+
+Scan the **full session output** (all steps) and extract knowledge from two sources:
+
+**Source 1 — `[KB+]` inline annotations** (primary source — collect every marker emitted during the session):
+
+Scan all agent output (Steps 5, 7, 8, 9) for `[KB+]` markers. Each marker is a candidate entry. Morgan reviews the full list and confirms which are genuinely new (not already in the Prior Knowledge block) before writing.
+
+| Marker | Writes to |
+|--------|-----------|
+| `[KB+ BIZ]` | `shared/business-rules.md` |
+| `[KB+ ARCH]` | `shared/architecture.md` |
+| `[KB+ PAT] ... [NEW]` | `shared/patterns.md` (new entry, Frequency: 1) |
+| `[KB+ PAT] ... [BUMP]` | `shared/patterns.md` (increment existing Frequency) |
+| `[KB+ RISK]` | `shared/regression-risks.md` |
+
+**Source 2 — Structured session extracts** (fallback — anything not already captured by `[KB+]` markers):
+
+| Category | Source | What to extract |
+|----------|--------|----------------|
+| **Root cause / fix** | Step 7i or Step 7-ENH-d | The root cause mechanism, affected file:line, fix applied |
+| **Business rules** | Steps 2, 3, 7 | Any domain behaviour that was clarified or confirmed but not yet annotated |
+| **Architecture insights** | Steps 5, 7 | Class hierarchy decisions, data flow understanding, ownership rules |
+| **Recurring patterns** | Jordan's findings in Step 7 | Which of Jordan's 20 patterns appeared — check against KB to confirm NEW vs BUMP |
+| **Regression risks** | Riley's assessment in Steps 7e, 9d | Areas flagged as fragile or widely coupled in Step 9 |
+| **Historical JIRA precedents** | Step 7b-i (Morgan's JIRA search) | Any business rule or architecture insight discovered in past closed tickets |
+| **Related tickets** | Steps 2, 3, 7b-i | Linked tickets and historical JIRA matches that provided context |
+
+Morgan de-duplicates across both sources — if a `[KB+]` marker and a structured extract describe the same thing, write one entry, not two.
+
+If no new knowledge was found beyond what is already in the KB (e.g. this ticket was very simple with no novel insights), state: "No new knowledge to record — existing KB entries remain current." and skip to the closing message.
+
+#### 13b. Write the Ticket Entry
+
+Create or overwrite `{KNOWLEDGE_DIR}/tickets/{TICKET_KEY}.md` using the ticket entry format defined in the Knowledge Base section above. Populate every field — do not leave any section blank; use "None" if genuinely empty.
+
+#### 13c. Update Shared Files
+
+For each extracted item:
+
+**Business rules** (`shared/business-rules.md`):
+- Grep the file for the rule's key terms. If an existing entry covers it: append `Confirmed by: {TICKET_KEY} ({today})` to that entry. If it is genuinely new: append a new entry at the bottom following the established format.
+
+**Architecture insights** (`shared/architecture.md`):
+- Grep for the class or component name. If an entry exists: update it with new detail (edit the relevant lines). If new: append a new entry.
+
+**Patterns** (`shared/patterns.md`):
+- Grep for the pattern name or Jordan pattern number. If an existing entry matches: increment `Frequency: N → N+1` and append `{TICKET_KEY} ({today})` to the Recurrences list. If new: append a new entry with `Frequency: 1`.
+
+**Regression risks** (`shared/regression-risks.md`):
+- Grep for the area (class name, method name, or layer). If an existing risk covers it: append the new ticket reference to confirm the risk is still current. If new: append a new entry.
+
+#### 13d. Update PALACE.md
+
+For every new or updated knowledge entry produced in 13b–13c:
+
+1. **Determine which room(s)** the entry belongs to using the Room Directory (match the entry's components and labels).
+2. **Compose or reuse the trigger phrase** — if the entry has a `trigger:` field, use it. If the trigger already exists in the room's table, skip (do not duplicate). If new, append a row to the room's `### Triggers` table.
+3. **Bump pattern frequency** in the relevant trigger line if the entry is a pattern recurrence (update the trigger's entry link to point to the bumped entry).
+4. Update the `Updated:` date and `Triggers:` count in the PALACE.md header.
+
+#### 13e. Update INDEX.md
+
+1. Add or update the ticket row in the `## Ticket Entries` table (include the `trigger:` field in the row).
+2. Add rows for any new shared entries created in 13c (updated entries do not get new rows).
+3. Update the header counts (`Ticket entries: N | Shared entries: N`).
+4. Update the `Updated:` date.
+
+#### 13f. Publish KB
+
+**If `KB_MODE=local`:** Skip all git and encryption steps. Files are already written to `KNOWLEDGE_DIR` in steps 13b–13e. Display:
+```
+📚 Knowledge Base Updated (local)
+   Location      : {KNOWLEDGE_DIR}/
+   Ticket entry  : tickets/{TICKET_KEY}.md — {created / updated}
+   Business rules: {N new / N confirmed}
+   Architecture  : {N new / N updated}
+   Patterns      : {N new / N bumped (PAT-XXX now seen {N}×)}
+   Risks         : {N new / N updated}
+   Palace        : {N triggers added to rooms: {room names}}
+   INDEX.md      : {N rows added}
+   Git           : local mode — no distribution
+```
+
+**If `KB_MODE=distributed`:**
+
+**Step 1 — If encryption is enabled (`PREVOIR_KB_KEY` is set): batch encrypt session files:**
+
+Use the batch encrypt command from the **Encryption Scheme** section above. All `.md` files in `KB_WORK_DIR` are encrypted to `.md.enc` in `KNOWLEDGE_DIR`. Stale `.md.enc` files with no corresponding source are deleted.
+
+If encryption is not enabled, files were written directly to `KNOWLEDGE_DIR` in steps 13b–13e — skip this step.
+
+**Step 2 — Push to the private KB repository:**
+
+Execute the git push sequence from the **Git Sync Rules** section above.
+
+**Step 3 — If encryption is enabled: delete the session temp directory:**
+```bash
+rm -rf "$KB_WORK_DIR"
+echo "KB: session temp dir ${KB_WORK_DIR} deleted."
+```
+
+On success display (encryption enabled):
+```
+📚 Knowledge Base Updated & Pushed (encrypted)
+   Repository    : {PREVOIR_KB_REPO}
+   Location      : {KNOWLEDGE_DIR}/ (.md.enc files)
+   Ticket entry  : tickets/{TICKET_KEY}.md.enc — {created / updated}
+   Business rules: {N new / N confirmed}
+   Architecture  : {N new / N updated}
+   Patterns      : {N new / N bumped (PAT-XXX now seen {N}×)}
+   Risks         : {N new / N updated}
+   Palace        : {N triggers added to rooms: {room names}}
+   INDEX.md      : {N rows added}
+   Encrypted     : {N} .md.enc files written
+   Git           : pushed to origin/main ({short hash})
+   Session temp  : {KB_WORK_DIR} deleted
+```
+
+On success display (no encryption):
+```
+📚 Knowledge Base Updated & Pushed
+   Repository    : {PREVOIR_KB_REPO}
+   Location      : {KNOWLEDGE_DIR}/
+   Ticket entry  : tickets/{TICKET_KEY}.md — {created / updated}
+   Business rules: {N new / N confirmed}
+   Architecture  : {N new / N updated}
+   Patterns      : {N new / N bumped (PAT-XXX now seen {N}×)}
+   Risks         : {N new / N updated}
+   Palace        : {N triggers added to rooms: {room names}}
+   INDEX.md      : {N rows added}
+   Git           : pushed to origin/main ({short hash})
+```
+
+If push fails: replace the `Git` line with `Git: push failed — committed locally. Run: cd {KNOWLEDGE_DIR} && git push origin main`. If encryption was enabled, still delete `KB_WORK_DIR`.
+
+Then close with the ready-to-code message from Step 12.
+
+---
+
 ---
 
 ---
@@ -1702,6 +2634,17 @@ Then end with:
 ## PR Review Mode
 
 Execute these steps when the invocation triggers **PR Review Mode** (see Mode Selection above). Do not run the Dev Mode steps. Present output for each step as it completes.
+
+---
+
+### Step R0 — Knowledge Base: Initialise & Query
+
+Identical to Step 0 in Dev Mode. Run Phase A (initialise) before Step R1, and Phase B (query by components/labels) after Step R1.
+
+The Prior Knowledge block carries into:
+- Step R2 (does KB confirm or extend the problem statement and acceptance criteria?)
+- Step R5 (reviewers must state whether KB patterns or risks are relevant to the diff — Morgan must reference KB history in the verdict)
+- Step R6 (consolidated report must note whether any finding recurs from a KB entry)
 
 ---
 
@@ -1816,38 +2759,58 @@ The same team from Dev Mode convenes to review the code changes, with adjusted m
 
 Engineers (Alex, Sam, Jordan) are competing for **Best Review** distinction. Riley and Morgan are not competing.
 
-#### R5a. Morgan Opens — Lead Briefing
+#### R5a. Morgan Opens — Historical JIRA Search + Lead Briefing
+
+Before briefing the review team, Morgan runs a mandatory JIRA historical search identical to the one performed in Dev Mode Step 7b-i. This surfaces any past resolutions, known regression notes, or prior investigations on the same component/label that inform the review.
+
+**R5a-i. Morgan's JIRA Historical Search**
+
+Run the same JQL queries as Step 7b-i (component match + label match, status Done/Resolved/Closed). For each result:
+1. Retrieve full ticket details and scan comments for root cause, fix location, regression warnings.
+2. Emit `[KB+ BIZ]` or `[KB+ ARCH]` markers for any newly discovered business knowledge.
+3. Present the Historical JIRA Precedents block (same format as Step 7b-i) before the review briefing.
+
+If no matching tickets found: state "No historical tickets found — proceeding fresh."
+If JIRA search fails: log `JIRA_SEARCH_WARN:` and continue.
+
+**R5a-ii. Morgan Lead Review Briefing**
 
 ```
-┌─ Morgan — Review Briefing ──────────────────────────────────────┐
-│ Ticket     : {TICKET_KEY} — {summary}                            │
-│ Type       : {Bug fix / Enhancement}                             │
-│ Branch     : {feature branch}                                    │
-│ Changes    : {N files, N commits}                                │
-│                                                                  │
-│ Review assignments:                                              │
-│   Alex  → Code quality, naming, structure, commit messages.      │
-│            Flag anything that violates project conventions or    │
-│            is harder to read/maintain than it needs to be.       │
-│   Sam   → Logic correctness. Does the fix actually address the   │
-│            root cause / acceptance criteria? Trace the data      │
-│            flow through the changed code.                        │
-│   Jordan → Run your full 20-pattern checklist on every changed   │
-│            file. Flag any defensive pattern violations.          │
-│   Riley → Test coverage. Does the change have tests? Are the     │
-│            acceptance criteria verifiable? What regression       │
-│            surface is introduced? What edge cases are uncovered? │
-│                                                                  │
-│ Schedule:                                                        │
-│   T+2 min : Mid-point check-in (all four report progress)       │
-│   T+4 min : Final findings due                                   │
-│   T+5 min : Riley's questions + Morgan's cross-examination       │
-│   T+6 min : Debate round + verdict                              │
-│                                                                  │
-│ Rules: Cite file:line for every finding. Unsupported claims      │
-│ will be challenged. Focus on the diff — do not re-investigate    │
-│ the root cause from scratch.                                     │
-└────────────────────────────────────────────────────────────────────┘
+┌─ Morgan — Review Briefing ──────────────────────────────────────────┐
+│ Ticket     : {TICKET_KEY} — {summary}                               │
+│ Type       : {Bug fix / Enhancement}                                │
+│ Branch     : {feature branch}                                       │
+│ Changes    : {N files, N commits}                                   │
+│ Prior KB   : {N triggers matched / "none — fresh start"}            │
+│ JIRA history: {N past tickets / "none found"}                       │
+│                                                                     │
+│ Review assignments:                                                 │
+│   Alex  → Code quality, naming, structure, commit messages.         │
+│            Flag anything that violates project conventions or       │
+│            is harder to read/maintain than it needs to be.          │
+│   Sam   → Logic correctness. Does the fix actually address the      │
+│            root cause / acceptance criteria? Trace the data         │
+│            flow through the changed code.                           │
+│   Jordan → Run your full 20-pattern checklist on every changed      │
+│            file. Emit [KB+ PAT] for every match.                    │
+│   Riley → Test coverage. Does the change have tests? Are the        │
+│            acceptance criteria verifiable? What regression          │
+│            surface is introduced? Emit [KB+ RISK] for every         │
+│            fragile area identified.                                 │
+│                                                                     │
+│ KB annotations: emit [KB+] markers inline whenever you discover a   │
+│ business rule, architecture insight, pattern, or regression risk.   │
+│                                                                     │
+│ Schedule:                                                           │
+│   T+2 min : Mid-point check-in (all four report progress)          │
+│   T+4 min : Final findings due                                      │
+│   T+5 min : Riley's questions + Morgan's cross-examination          │
+│   T+6 min : Debate round + verdict                                 │
+│                                                                     │
+│ Rules: Cite file:line for every finding. Unsupported claims         │
+│ will be challenged. Focus on the diff — do not re-investigate       │
+│ the root cause from scratch.                                        │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 #### R5b. Parallel Review — All Four Reviewers (4-minute block)
@@ -1869,6 +2832,8 @@ Alex reviews in priority order (stop early on High confidence findings):
 7. Consistency — does the code style (spacing, bracket style, logging pattern) match the surrounding file?
 8. Architecture alignment — does the change fit the established layering and responsibility model?
 
+**Alex KB annotations (Review):** Emit `[KB+ ARCH]` if the diff reveals a layer interaction or ownership decision (e.g. "config wiring belongs in concrete subclass per this pattern"). Emit `[KB+ RISK]` if a shared utility or widely-used method was modified.
+
 ---
 
 **Sam — Logic Correctness & Root Cause Alignment**
@@ -1883,6 +2848,8 @@ Sam reviews in priority order:
 6. Check the data flow end-to-end through the diff — is the correct value produced at each transition?
 7. Verify acceptance criteria coverage — for each criterion listed in Step R2, confirm a code path exists that satisfies it
 8. Confirm the fix does not silently degrade any related functionality
+
+**Sam KB annotations (Review):** Emit `[KB+ BIZ]` for any domain rule confirmed or violated by the diff (e.g. "fix correctly sets pendingAlertResolve before save — BIZ-001 confirmed"). Emit `[KB+ ARCH]` for any data flow interaction made visible by reading the diff.
 
 ---
 
@@ -1902,6 +2869,8 @@ Pattern N — {Pattern Name}: {Finding}
 
 If a pattern has no finding in the diff, state: `Pattern N — {Pattern Name}: No issue found in diff.`
 
+**Jordan KB annotations (Review):** Emit `[KB+ PAT] Pattern #{N}: {description} — {file:line} [NEW]` for first occurrences or `[BUMP]` for recurrences, exactly as in Dev Mode. Emit `[KB+ ARCH]` for any structural insight from the diff.
+
 ---
 
 **Riley — Test Coverage & Acceptance Criteria**
@@ -1914,6 +2883,8 @@ Riley reviews in priority order (stop when impact picture is clear):
 4. What is the regression surface of the change? List flows that pass through the changed code that are not covered by the tests in the diff.
 5. Identify any edge cases that are not tested: concurrent access, DB dialect differences, multi-client data isolation, session boundaries.
 6. Assess testability: can the fix be verified from the UI/API, or does it require DB-level verification? Flag anything that is not observable without internal access.
+
+**Riley KB annotations (Review):** Emit `[KB+ RISK]` for every fragile area or untested regression surface identified. Emit `[KB+ BIZ]` if an acceptance criterion implies a domain rule not yet in the KB.
 
 Riley submits a **Test Coverage Assessment** in this format:
 ```
@@ -2277,9 +3248,13 @@ Write a temporary Markdown file at `/tmp/{TICKET_KEY}-review.md`. Populate every
 
 ## Step R5 — Engineering Panel Code Review
 
-### R5a. Morgan's Review Briefing
+### R5a-i. Historical JIRA Precedents
 
-{Reproduce the full Morgan briefing box verbatim}
+{Reproduce the full Historical JIRA Precedents block verbatim from Step R5a-i, or "No historical tickets found."}
+
+### R5a-ii. Morgan's Review Briefing
+
+{Reproduce the full Morgan Review Briefing box verbatim from Step R5a-ii}
 
 ### R5b. Mid-Point Check-In (T+2)
 
@@ -2364,11 +3339,152 @@ Then end with:
 
 ---
 
+### Step R9 — Knowledge Base: Record Review Learnings
+
+After Step R8 confirms the PDF has been saved, update the knowledge base with what the review panel discovered. This ensures review findings are available to future Dev and Review sessions on related tickets.
+
+#### R9a. Identify What Is Worth Recording
+
+Scan the **full review session output** (all steps) and extract knowledge from two sources:
+
+**Source 1 — `[KB+]` inline annotations** (primary source):
+
+Scan all reviewer output (Steps R4, R5) for `[KB+]` markers emitted during the review. Each marker is a candidate entry. Morgan confirms which are genuinely new before writing.
+
+| Marker | Writes to |
+|--------|-----------|
+| `[KB+ BIZ]` | `shared/business-rules.md` (confirmed or violated) |
+| `[KB+ ARCH]` | `shared/architecture.md` |
+| `[KB+ PAT] ... [NEW/BUMP]` | `shared/patterns.md` |
+| `[KB+ RISK]` | `shared/regression-risks.md` |
+
+**Source 2 — Structured review extracts** (fallback — anything not already annotated):
+
+| Category | Source | What to extract |
+|----------|--------|----------------|
+| **Confirmed / refuted root causes** | Steps R2, R3 | Does the code fix actually match the stated root cause? Record the confirmation. |
+| **Business rules confirmed** | Steps R2, R5 (Sam) | Any business rule validated by seeing it correctly implemented in the diff |
+| **Business rules violated** | Step R5 (Sam, Morgan) | Any business rule the diff violated — record with `⚠️ VIOLATION` tag |
+| **Architecture insights** | Step R5 (Morgan, Sam) | Class hierarchy, ownership, layer responsibilities visible in the diff |
+| **Patterns in the review** | Step R5 (Jordan) | Which of Jordan's 20 patterns appeared — check KB for NEW vs BUMP |
+| **Regression risks confirmed** | Step R5 (Riley, Morgan) | Fragile areas Riley identified that future changes must protect |
+| **QA gaps discovered** | Step R5 (Riley) | Missing test coverage — record so future tickets know to test these paths |
+| **Historical JIRA precedents** | Step R5a Morgan JIRA search | Any business rule or architecture insight from past closed tickets |
+
+Morgan de-duplicates across both sources before writing.
+
+If the verdict is **APPROVED** with no noteworthy findings, state: "No new knowledge beyond ticket confirmation — recording ticket result only." and write only the ticket entry (R9b).
+
+#### R9b. Write the Ticket Entry
+
+Create or overwrite `{KNOWLEDGE_DIR}/tickets/{TICKET_KEY}.md`. For review sessions, use `type: bug-fix-reviewed` or `type: enhancement-reviewed` and populate the `verdict` field with the Morgan verdict.
+
+Include a **Review Findings Summary** section in the file:
+```markdown
+## Review Findings Summary
+Verdict: {✅ APPROVED / ⚠️ APPROVED WITH CONDITIONS / 🔄 REQUEST CHANGES / ❌ REJECT}
+Critical issues: {N} | Major: {N} | Minor: {N}
+
+{bulleted list of the most significant findings — Critical and Major only}
+```
+
+#### R9c. Update Shared Files
+
+Apply the same rules as Step 13c in Dev Mode:
+- **Confirm** existing business rules that the diff correctly implements (add `Confirmed by: {TICKET_KEY} review`)
+- **Flag violations** of existing business rules as new entries in `shared/business-rules.md` with a `⚠️ VIOLATION` tag, citing the review finding
+- Bump pattern frequency counters in `shared/patterns.md` for any Jordan patterns found in the diff
+- Add or update regression risks identified by Riley in `shared/regression-risks.md`
+- Append architecture insights discovered from reading the diff to `shared/architecture.md`
+
+#### R9d. Update PALACE.md
+
+Same process as Step 13d — for each new or updated entry, add triggers to the matched room(s), bump frequency counters for recurring patterns, update the Palace header counts.
+
+#### R9e. Update INDEX.md
+
+Same as Step 13e — add/update the ticket row, add new shared entries, update counts and date.
+
+#### R9f. Publish KB
+
+**If `KB_MODE=local`:** Skip all git and encryption steps. Files are already written to `KNOWLEDGE_DIR` in steps R9b–R9e. Display:
+```
+📚 Knowledge Base Updated (local)
+   Location      : {KNOWLEDGE_DIR}/
+   Ticket entry  : tickets/{TICKET_KEY}.md — {created / updated}
+   Verdict       : {✅ / ⚠️ / 🔄 / ❌} recorded
+   Rules confirmed   : {N}  |  Rules violated: {N}
+   Patterns bumped   : {list or "None"}
+   Risks             : {N new / N updated}
+   Architecture      : {N new / N updated}
+   Palace            : {N triggers added to rooms: {room names}}
+   INDEX.md          : {N rows added}
+   Git               : local mode — no distribution
+```
+
+**If `KB_MODE=distributed`:**
+
+**Step 1 — If encryption is enabled (`PREVOIR_KB_KEY` is set): batch encrypt session files:**
+
+Use the batch encrypt command from the **Encryption Scheme** section above. If encryption is not enabled, files were written directly to `KNOWLEDGE_DIR` in steps R9b–R9e — skip this step.
+
+**Step 2 — Push to the private KB repository:**
+
+Execute the git push sequence from the **Git Sync Rules** section above.
+
+**Step 3 — If encryption is enabled: delete the session temp directory:**
+```bash
+rm -rf "$KB_WORK_DIR"
+echo "KB: session temp dir ${KB_WORK_DIR} deleted."
+```
+
+On success display (encryption enabled):
+```
+📚 Knowledge Base Updated & Pushed (encrypted)
+   Repository    : {PREVOIR_KB_REPO}
+   Location      : {KNOWLEDGE_DIR}/ (.md.enc files)
+   Ticket entry  : tickets/{TICKET_KEY}.md.enc — {created / updated}
+   Verdict       : {✅ / ⚠️ / 🔄 / ❌} recorded
+   Rules confirmed   : {N}  |  Rules violated: {N}
+   Patterns bumped   : {list or "None"}
+   Risks             : {N new / N updated}
+   Architecture      : {N new / N updated}
+   Palace            : {N triggers added to rooms: {room names}}
+   INDEX.md          : {N rows added}
+   Encrypted     : {N} .md.enc files written
+   Git           : pushed to origin/main ({short hash})
+   Session temp  : {KB_WORK_DIR} deleted
+```
+
+On success display (no encryption):
+```
+📚 Knowledge Base Updated & Pushed
+   Repository    : {PREVOIR_KB_REPO}
+   Location      : {KNOWLEDGE_DIR}/
+   Ticket entry  : tickets/{TICKET_KEY}.md — {created / updated}
+   Verdict       : {✅ / ⚠️ / 🔄 / ❌} recorded
+   Rules confirmed   : {N}  |  Rules violated: {N}
+   Patterns bumped   : {list or "None"}
+   Risks             : {N new / N updated}
+   Architecture      : {N new / N updated}
+   Palace            : {N triggers added to rooms: {room names}}
+   INDEX.md          : {N rows added}
+   Git           : pushed to origin/main ({short hash})
+```
+
+If push fails: replace the `Git` line with `Git: push failed — committed locally. Run: cd {KNOWLEDGE_DIR} && git push origin main`. If encryption was enabled, still delete `KB_WORK_DIR`.
+
+---
+
 ---
 
 ## Output Format
 
-Present output in clearly labelled sections matching the 12 steps above. Use markdown headings. Keep each section concise but complete. Step 12 produces the final confirmation message and report path — that replaces the closing "Ready to code" statement.
+Present output in clearly labelled sections. Use markdown headings. Keep each section concise but complete.
+
+**Dev Mode:** Step 0 (KB query) → Steps 1–12 → Step 13 (KB update). Step 12 produces the PDF confirmation; Step 13 produces the KB update confirmation. The "Ready to code" message follows Step 13.
+
+**PR Review Mode:** Step R0 (KB query) → Steps R1–R8 → Step R9 (KB update). Step R8 produces the PDF confirmation; Step R9 produces the KB update confirmation. The "Review complete" message follows Step R9.
 
 ---
 

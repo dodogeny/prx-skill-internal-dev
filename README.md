@@ -1057,7 +1057,7 @@ Add the following — replacing `<username>` with your username on Windows, or u
 ### 3. Install the plugin
 
 ```bash
-claude plugin install prx@prx
+claude plugin install dodogeny@prx
 ```
 
 ### 4. Verify
@@ -1066,7 +1066,7 @@ claude plugin install prx@prx
 claude plugin list
 ```
 
-You should see `prx@prx` listed as installed.
+You should see `dodogeny@prx` listed as installed.
 
 ### 5. Upgrading
 
@@ -1079,13 +1079,13 @@ Pull the latest changes into your cloned directory, then update the plugin:
 **macOS / Linux:**
 ```bash
 git -C ~/.claude/plugins/marketplaces/prx pull
-claude plugin update prx@prx
+claude plugin update dodogeny@prx
 ```
 
 **Windows (PowerShell):**
 ```powershell
 git -C "$env:USERPROFILE\.claude\plugins\marketplaces\prx" pull
-claude plugin update prx@prx
+claude plugin update dodogeny@prx
 ```
 
 #### If you registered with the hosted Git URL
@@ -1093,7 +1093,7 @@ claude plugin update prx@prx
 Claude Code manages the fetch from GitHub. Just run:
 
 ```bash
-claude plugin update prx@prx
+claude plugin update dodogeny@prx
 ```
 
 #### Verify the upgrade
@@ -1102,7 +1102,7 @@ claude plugin update prx@prx
 claude plugin list
 ```
 
-The version number next to `prx@prx` should reflect the latest release.
+The version number next to `dodogeny@prx` should reflect the latest release.
 
 ---
 
@@ -1584,7 +1584,7 @@ Edit `plugin/skills/dev/SKILL.md`, commit, and push to GitHub.
 Claude Code manages the marketplace directory internally. Always use the Claude-managed command to update — do **not** run `git pull` directly inside `~/.claude/plugins/marketplaces/prx` as Claude Code may wipe the folder when it detects external changes.
 
 ```bash
-claude plugin update prx@prx
+claude plugin update dodogeny@prx
 ```
 
 #### Option B — Reinstall (if Option A fails)
@@ -1593,14 +1593,14 @@ If the update command fails or the plugin appears broken:
 
 **macOS / Linux:**
 ```bash
-claude plugin uninstall prx@prx
-claude plugin install prx@prx
+claude plugin uninstall dodogeny@prx
+claude plugin install dodogeny@prx
 ```
 
 **Windows (PowerShell):**
 ```powershell
-claude plugin uninstall prx@prx
-claude plugin install prx@prx
+claude plugin uninstall dodogeny@prx
+claude plugin install dodogeny@prx
 ```
 
 #### Verify the update
@@ -1609,7 +1609,7 @@ claude plugin install prx@prx
 claude plugin list
 ```
 
-The version number next to `prx@prx` should reflect the latest release.
+The version number next to `dodogeny@prx` should reflect the latest release.
 
 ---
 
@@ -1688,7 +1688,7 @@ git push origin main
 After pushing, notify the team to run:
 
 ```bash
-claude plugin update prx@prx
+claude plugin update dodogeny@prx
 ```
 
 > Do **not** advise running `git pull` directly inside `~/.claude/plugins/marketplaces/prx` — Claude Code manages that directory and may wipe it if it detects external git changes.

@@ -140,8 +140,7 @@ _(Applies to `KB_MODE=distributed`.)_
 
 ```
 {KNOWLEDGE_DIR}/                        ← KB root (path depends on KB_MODE — see Storage Modes)
-├── PALACE.md   (or PALACE.md.enc)     ← Memory Palace: spatial map + trigger anchors
-├── INDEX.md    (or INDEX.md.enc)      ← master index — one line per entry; grep second
+├── INDEX.md    (or INDEX.md.enc)      ← combined index: Memory Palace (primary) + Master Index (fallback)
 ├── tickets/                            ← per-ticket files (one per analysed / reviewed ticket)
 │   └── IV-XXXX.md  (or .md.enc)
 └── shared/                             ← accumulated team knowledge
@@ -153,11 +152,15 @@ _(Applies to `KB_MODE=distributed`.)_
 
 In `KB_MODE=local` all files are plain `.md`. In `KB_MODE=distributed` all files on disk are `.md.enc`; the plain `.md` files exist only in `KB_WORK_DIR=/tmp/prx-kb-{PID}/` during the session.
 
+> **Note:** `PALACE.md` no longer exists as a separate file. The Memory Palace (room trigger tables) and the Master Index (flat entry list) are both sections within `INDEX.md`.
+
 ---
 
 ### Memory Palace
 
-The Memory Palace is the primary retrieval layer. It uses the **Method of Loci** — each part of the V1 system is a named **Room**; each knowledge entry has a **vivid trigger phrase** that makes it instantly recognisable when an agent reads a ticket. Agents walk the Palace first, before touching INDEX.md.
+The Memory Palace is the primary retrieval layer. It uses the **Method of Loci** — each part of the V1 system is a named **Room**; each knowledge entry has a **vivid trigger phrase** that makes it instantly recognisable when an agent reads a ticket. Agents walk the Palace first, before falling through to the Master Index section.
+
+The Memory Palace lives in the **`## Memory Palace` section of `INDEX.md`** — it is not a separate file.
 
 #### System Map (the loci)
 
@@ -200,15 +203,34 @@ The Memory Palace is the primary retrieval layer. It uses the **Method of Loci**
 
 #### Trigger Anchors
 
-Each knowledge entry has a **trigger** — a 5–8 word memorable phrase that lets an agent recognise relevance in under one second. Triggers live in `PALACE.md` and are updated when new entries are added.
+Each knowledge entry has a **trigger** — a 5–8 word memorable phrase that lets an agent recognise relevance in under one second. Triggers live in the **`## Memory Palace` section of `INDEX.md`** and are updated when new entries are added.
 
-**PALACE.md format:**
+#### How Agents Use the Palace
+
+1. **Map the ticket to rooms** — from the ticket's components and labels, identify which Room(s) apply using the Room Directory table above.
+2. **Scan triggers** — read only the `### Triggers` table for the matched room(s). This takes one read, ~5 lines per room.
+3. **Recognise matches** — any trigger that is relevant to the current ticket is a hit. Follow its `File` link.
+4. **Read the matched entry** — grep the file for the section anchor, read ±40 lines.
+5. **Fall through to the Master Index** — if the Palace yields no matches, grep the `## Master Index` section of `INDEX.md` directly by component/label keyword as a fallback.
+
+**This two-layer retrieval (Palace triggers → Master Index fallback) means agents spend ≤ 3 read operations to surface all relevant prior knowledge, even as the KB grows to hundreds of entries.**
+
+---
+
+### INDEX.md Format
+
+`INDEX.md` is the single combined KB index. It has two sections:
+
+- **`## Memory Palace`** — the primary retrieval layer. Room-based trigger tables. Agents read this first.
+- **`## Master Index`** — the fallback layer. A flat list of all entries, greppable by component, label, ticket key, and trigger.
+
 ```markdown
-# Prx Memory Palace
-Updated: YYYY-MM-DD | Rooms: 6 | Triggers: N
+# Prx Knowledge Base
+Updated: YYYY-MM-DD | Rooms: 6 | Triggers: N | Ticket entries: N | Shared entries: N
 
-## 🏠 CASE ROOM  (CaseManager, FRAMS, Cases)
-### Triggers
+## Memory Palace
+
+### 🏠 CASE ROOM  (CaseManager, FRAMS, Cases)
 | Trigger | KB Entry | Type | File |
 |---------|----------|------|------|
 | "resolve case → must resolve alerts" | BIZ-001 | business-rule | shared/business-rules.md#biz-001 |
@@ -217,59 +239,37 @@ Updated: YYYY-MM-DD | Rooms: 6 | Triggers: N
 | "pendingAlertResolve drives the chain" | ARCH-001 | architecture | shared/architecture.md#arch-001 |
 | "flag removed in cleanup — IV-3672" | IV-3672 | bug-fix | tickets/IV-3672.md |
 
-## 🚨 ALERT ROOM  (AlertCentral, FRAMS, Alerts)
-### Triggers
+### 🚨 ALERT ROOM  (AlertCentral, FRAMS, Alerts)
 | Trigger | KB Entry | Type | File |
 |---------|----------|------|------|
 | "resolve case → must resolve alerts" | BIZ-001 | business-rule | shared/business-rules.md#biz-001 |
 | "resolveAlertCentral — shared by 3 screens" | RISK-002 | regression-risk | shared/regression-risks.md#risk-002 |
 
-## 🖥️ FRONT ROOM  (GWT Frontend, fcfrontend)
-### Triggers
-...
+### 🖥️ FRONT ROOM  (GWT Frontend, fcfrontend)
+| Trigger | KB Entry | Type | File |
+|---------|----------|------|------|
 
-## 🔧 ENGINE ROOM  (Backend API, fcbackend)
-### Triggers
-...
+### 🔧 ENGINE ROOM  (Backend API, fcbackend)
+| Trigger | KB Entry | Type | File |
+|---------|----------|------|------|
 
-## ⚙️ WORKER ROOM  (Plugin, Workers, fcplugin)
-### Triggers
-...
+### ⚙️ WORKER ROOM  (Plugin, Workers, fcplugin)
+| Trigger | KB Entry | Type | File |
+|---------|----------|------|------|
 
-## 🗄️ VAULT  (Database, fcbuild/scripts)
-### Triggers
-...
-```
+### 🗄️ VAULT  (Database, fcbuild/scripts)
+| Trigger | KB Entry | Type | File |
+|---------|----------|------|------|
 
-Note: A trigger may appear in multiple rooms if the knowledge spans components (e.g. BIZ-001 "resolve case → must resolve alerts" appears in both CASE ROOM and ALERT ROOM).
+## Master Index
 
-#### How Agents Use the Palace
-
-1. **Map the ticket to rooms** — from the ticket's components and labels, identify which Room(s) apply using the Room Directory table above.
-2. **Scan triggers** — read only the `### Triggers` table for the matched room(s). This takes one read per room, ~5 lines each.
-3. **Recognise matches** — any trigger that is relevant to the current ticket is a hit. Follow its `File` link.
-4. **Read the matched entry** — grep the file for the section anchor, read ±40 lines.
-5. **Fall through to INDEX.md** — if the Palace yields no matches, grep `INDEX.md` directly by component/label keyword as a fallback.
-
-**This two-layer retrieval (Palace triggers → INDEX fallback) means agents spend ≤ 3 read operations to surface all relevant prior knowledge, even as the KB grows to hundreds of entries.**
-
----
-
-### INDEX.md Format
-
-`INDEX.md` is the fallback lookup layer and the authoritative list of all entries. Every entry has exactly one row here.
-
-```markdown
-# Prx Knowledge Base — Master Index
-Updated: YYYY-MM-DD | Ticket entries: N | Shared entries: N
-
-## Ticket Entries
+### Ticket Entries
 | Ticket | Date | Type | Components | Labels | Summary | File |
 |--------|------|------|------------|--------|---------|------|
 | IV-3672 | 2026-03-10 | bug-fix | CaseManager | FRAMS | Boolean flag not reset — alerts stay open after case resolve | tickets/IV-3672.md |
 | IV-3695 | 2026-04-01 | enhancement | AlertCentral | FRAMS | New bulk-resolve endpoint added to AlertService | tickets/IV-3695.md |
 
-## Shared Knowledge Entries
+### Shared Knowledge Entries
 | KB-ID | Domain | Date | Type | Trigger | File | Section |
 |-------|--------|------|------|---------|------|---------|
 | BIZ-001 | Case Management | 2026-03-10 | business-rule | resolve case → must resolve alerts | shared/business-rules.md | #biz-001 |
@@ -278,7 +278,7 @@ Updated: YYYY-MM-DD | Ticket entries: N | Shared entries: N
 | RISK-001 | Alert Sync | 2026-03-10 | regression-risk | resolveCase — four callers watch this | shared/regression-risks.md | #risk-001 |
 ```
 
-Note the `Trigger` column — it matches the trigger phrases in `PALACE.md`. This ensures `INDEX.md` keyword search and Palace trigger recognition surface the same entries.
+Note: A trigger may appear in multiple rooms if the knowledge spans components (e.g. BIZ-001 "resolve case → must resolve alerts" appears in both CASE ROOM and ALERT ROOM). The `Trigger` column in the Master Index matches the trigger phrases in the Memory Palace — the same entry is reachable via either layer.
 
 ### Ticket Entry File Format (`tickets/IV-XXXX.md`)
 
@@ -293,7 +293,7 @@ labels: {comma-separated list}
 rooms: {palace rooms this ticket maps to — e.g. "CASE ROOM, ALERT ROOM"}
 verdict: {Approved / Request Changes / N/A}
 summary: {one-line summary}
-trigger: {5–8 word memorable trigger phrase for PALACE.md}
+trigger: {5–8 word memorable trigger phrase for INDEX.md Memory Palace}
 ---
 
 ## Problem
@@ -324,8 +324,8 @@ trigger: {5–8 word memorable trigger phrase for PALACE.md}
 ### Shared Knowledge Files Format
 
 Each shared file accumulates entries chronologically. Every entry has:
-- An anchor (`{#id}`) matching its INDEX.md row
-- A **trigger phrase** in the heading (used in PALACE.md)
+- An anchor (`{#id}`) matching its row in the Master Index section of INDEX.md
+- A **trigger phrase** in the heading (used in the Memory Palace section of INDEX.md)
 - A source ticket, date, and confirmation history
 
 **`shared/business-rules.md` entry format:**
@@ -361,8 +361,8 @@ complementary paths explicitly before submitting the fix.
 
 ### Retrieval Rules
 
-1. **Palace first** — read `PALACE.md`, find the room(s) for the ticket's components/labels, scan triggers. This is always ≤ 3 read operations regardless of KB size.
-2. **INDEX.md as fallback** — if Palace yields no matches, grep `INDEX.md` by component, label, and ticket key.
+1. **Palace first** — read `INDEX.md`, navigate to `## Memory Palace`, find the room(s) for the ticket's components/labels, scan triggers. This is always ≤ 3 read operations regardless of KB size.
+2. **Master Index as fallback** — if Palace yields no matches, grep the `## Master Index` section of `INDEX.md` by component, label, and ticket key.
 3. **Read only matched files** — never read a full shared file; grep for the section anchor, then read ±40 lines.
 4. **Max 5 ticket entries** — if more than 5 ticket entries match, take the 5 most recent by date.
 5. **All matching shared entries** — business rules, patterns, risks matching the query are always included.
@@ -370,10 +370,10 @@ complementary paths explicitly before submitting the fix.
 
 ### Re-Index Rules
 
-INDEX.md and PALACE.md are **derived data** — they index what is in `tickets/` and `shared/`. They contain no information that is not already present in those source files. Because of this, they are **always fully rebuilt from scratch** after every pull rather than merged. This eliminates all consistency problems regardless of how many developers push, in what order, or whether a push was done manually outside the skill.
+`INDEX.md` is **derived data** — it indexes what is in `tickets/` and `shared/`. It contains no information that is not already present in those source files. Because of this, it is **always fully rebuilt from scratch** after every pull rather than merged. This eliminates all consistency problems regardless of how many developers push, in what order, or whether a push was done manually outside the skill.
 
 **Why full rebuild, not append-only merge:**
-When multiple developers push to the same KB repo, git must merge their copies of INDEX.md and PALACE.md. Since both files are append-only tables, git's default merge will produce conflicts whenever two developers both added rows. Resolving these conflicts manually is error-prone and defeats the purpose of automation. A full rebuild from the actual source files on disk always produces a correct, conflict-free result.
+When multiple developers push to the same KB repo, git must merge their copies of `INDEX.md`. Since it is an append-only file, git's default merge will produce conflicts whenever two developers both added rows. Resolving these conflicts manually is error-prone and defeats the purpose of automation. A full rebuild from the actual source files on disk always produces a correct, conflict-free result.
 
 **`.gitattributes` — union merge for source files:**
 
@@ -384,7 +384,6 @@ The KB repo must have a `.gitattributes` file to prevent git conflicts on `share
 tickets/*.md        merge=union
 shared/*.md         merge=union
 INDEX.md            merge=union
-PALACE.md           merge=union
 ```
 
 `merge=union` tells git to keep lines from **both** sides on conflict (instead of marking `<<<<<<<` conflict markers). For append-only Markdown files this is always correct — all appended entries survive. The full rebuild then de-duplicates and normalises the result.
@@ -403,22 +402,21 @@ PALACE.md           merge=union
      - Collect into an in-memory shared entry list
 
 3. Rebuild INDEX.md from scratch:
-   - Write fresh header: "Updated: {today} | Ticket entries: N | Shared entries: M"
-   - Write ## Ticket Entries table — one row per ticket, sorted by date desc
-   - Write ## Shared Knowledge Entries table — one row per shared entry
+   - Write fresh header: "Updated: {today} | Rooms: 6 | Triggers: N | Ticket entries: N | Shared entries: M"
+   - Write `## Memory Palace` section:
+     - For each of the 6 rooms, collect all triggers from tickets and shared entries
+       whose `rooms:` field includes that room
+     - Write each room's trigger table with deduplicated, sorted rows
+     - For patterns: include the current Frequency value from the source entry
+   - Write `## Master Index` section:
+     - Write `### Ticket Entries` table — one row per ticket, sorted by date desc
+     - Write `### Shared Knowledge Entries` table — one row per shared entry
 
-4. Rebuild PALACE.md from scratch:
-   - Write fresh header: "Updated: {today} | Rooms: 6 | Triggers: N"
-   - For each of the 6 rooms, collect all triggers from tickets and shared entries
-     whose `rooms:` field includes that room
-   - Write each room's ### Triggers table with deduplicated, sorted rows
-   - For patterns: include the current Frequency value from the source entry
-
-5. Write both files to KB_WORK_DIR.
+4. Write INDEX.md to KB_WORK_DIR.
 ```
 
 **This handles every multi-developer scenario automatically:**
-- Developer joins late with a stale INDEX.md → pull + rebuild gives them the full picture
+- Developer joins late with a stale INDEX.md → pull + rebuild gives them the full picture (both Palace and Master Index)
 - Developer manually pushes raw ticket files → other developers' rebuild picks them up
 - Two developers push simultaneously → union merge keeps all rows → rebuild de-duplicates
 - Developer pushes from outside the skill → rebuild on next pull reconciles everything
@@ -428,11 +426,10 @@ PALACE.md           merge=union
 ### Update Rules
 
 1. **Always write `tickets/IV-XXXX.md`** at the end of every Dev and Review session.
-2. **Always update `PALACE.md`** — add the new ticket's trigger to the relevant room(s); add new shared entry triggers to matched rooms; increment frequency in patterns.
-3. **Append to shared files only for genuinely new knowledge** — check existing entries before appending; never duplicate.
-4. **Update `INDEX.md`** — add/update rows for every written entry; update counts and date.
-5. **Bump pattern frequency** — when an existing pattern recurs, increment `Frequency: N` and append the ticket to Recurrences.
-6. **Confirm business rules** — when a review session validates an existing rule, add `Confirmed by:` to the entry rather than creating a duplicate.
+2. **Append to shared files only for genuinely new knowledge** — check existing entries before appending; never duplicate.
+3. **Update `INDEX.md`** — add the new ticket's trigger to the relevant room(s) in the Memory Palace section; add/update rows in the Master Index section; update header counts and date.
+4. **Bump pattern frequency** — when an existing pattern recurs, increment `Frequency: N` and append the ticket to Recurrences.
+5. **Confirm business rules** — when a review session validates an existing rule, add `Confirmed by:` to the entry rather than creating a duplicate.
 
 ### KB Live Annotation Protocol
 
@@ -532,7 +529,6 @@ cat > .gitattributes << 'EOF'
 tickets/*.md    merge=union
 shared/*.md     merge=union
 INDEX.md        merge=union
-PALACE.md       merge=union
 EOF
 
 git add README.md .gitattributes
@@ -745,48 +741,53 @@ echo "KB: decrypted ${enc_count} encrypted files → ${KB_WORK_DIR}/"
 
 **Create skeleton files if this is a first run:**
 
-If `PALACE.md` does not exist, create:
+If `INDEX.md` does not exist, create:
 ```markdown
-# Prx Memory Palace
-Updated: {today} | Rooms: 6 | Triggers: 0
+# Prx Knowledge Base
+Updated: {today} | Rooms: 6 | Triggers: 0 | Ticket entries: 0 | Shared entries: 0
 
-## 🏠 CASE ROOM  (CaseManager, FRAMS, Cases)
-### Triggers
+## Memory Palace
+
+### 🏠 CASE ROOM  (CaseManager, FRAMS, Cases)
 | Trigger | KB Entry | Type | File |
 |---------|----------|------|------|
 
-## 🚨 ALERT ROOM  (AlertCentral, FRAMS, Alerts)
-### Triggers
+### 🚨 ALERT ROOM  (AlertCentral, FRAMS, Alerts)
 | Trigger | KB Entry | Type | File |
 |---------|----------|------|------|
 
-## 🖥️ FRONT ROOM  (GWT Frontend, fcfrontend)
-### Triggers
+### 🖥️ FRONT ROOM  (GWT Frontend, fcfrontend)
 | Trigger | KB Entry | Type | File |
 |---------|----------|------|------|
 
-## 🔧 ENGINE ROOM  (Backend API, fcbackend)
-### Triggers
+### 🔧 ENGINE ROOM  (Backend API, fcbackend)
 | Trigger | KB Entry | Type | File |
 |---------|----------|------|------|
 
-## ⚙️ WORKER ROOM  (Plugin, Workers, fcplugin)
-### Triggers
+### ⚙️ WORKER ROOM  (Plugin, Workers, fcplugin)
 | Trigger | KB Entry | Type | File |
 |---------|----------|------|------|
 
-## 🗄️ VAULT  (Database, fcbuild/scripts)
-### Triggers
+### 🗄️ VAULT  (Database, fcbuild/scripts)
 | Trigger | KB Entry | Type | File |
 |---------|----------|------|------|
+
+## Master Index
+
+### Ticket Entries
+| Ticket | Date | Type | Components | Labels | Summary | File |
+|--------|------|------|------------|--------|---------|------|
+
+### Shared Knowledge Entries
+| KB-ID | Domain | Date | Type | Trigger | File | Section |
+|-------|--------|------|------|---------|------|---------|
 ```
 
-If `INDEX.md` does not exist, create the skeleton header (see INDEX.md Format above).
 If any `shared/*.md` file does not exist, create it with a title-only header.
 
 **Re-index after pull (distributed mode) or on every init (local mode):**
 
-After a pull, other developers may have pushed ticket or shared files that are not yet referenced in the local INDEX.md or PALACE.md. Scan the actual files on disk and reconcile any missing entries — do **not** rebuild from scratch; only add what is absent.
+After a pull, other developers may have pushed ticket or shared files that are not yet referenced in the local INDEX.md. Scan the actual files on disk and reconcile any missing entries — do **not** rebuild from scratch; only add what is absent.
 
 ```bash
 # Step 1 — Find ticket files not yet in INDEX.md
@@ -804,14 +805,13 @@ for f in "$KB_WORK_DIR"/tickets/*.md; do
   labels=$(grep  "^labels:"  "$f" | head -1 | sed 's/^labels: *//')
   summary=$(grep "^summary:" "$f" | head -1 | sed 's/^summary: *//')
 
-  # Add row to INDEX.md Ticket Entries table
+  # Add row to Master Index section of INDEX.md
   echo "| $key | $date | $type | $components | $labels | $summary | tickets/${key}.md |" \
     >> "$KB_WORK_DIR/INDEX.md"
-  echo "KB_REINDEX: added $key to INDEX.md"
+  echo "KB_REINDEX: added $key to INDEX.md (Master Index)"
 
-  # Add trigger to PALACE.md for each room listed in frontmatter
-  # (Agent reads PALACE.md and appends the trigger row to each matched room's table)
-  echo "KB_REINDEX: trigger '${trigger}' for rooms '${rooms}' — add to PALACE.md"
+  # Add trigger to Memory Palace section of INDEX.md for each room listed in frontmatter
+  echo "KB_REINDEX: trigger '${trigger}' for rooms '${rooms}' — add to INDEX.md (Memory Palace)"
 done
 
 # Step 2 — Find shared entries not yet in INDEX.md
@@ -823,14 +823,14 @@ for f in "$KB_WORK_DIR"/shared/*.md; do
     id="${heading## }"                               # e.g. BIZ-001
     grep -q "$id" "$KB_WORK_DIR/INDEX.md" && continue
     trigger=$(grep -A1 "^## ${id}" "$f" | tail -1 | grep -oP '"[^"]+"' | head -1)
-    echo "KB_REINDEX: shared entry $id not in INDEX.md — add row for shared/$fname"
+    echo "KB_REINDEX: shared entry $id not in INDEX.md — add row to Master Index for shared/$fname"
   done
 done
 ```
 
-After the re-index scan, update the `Updated:` date and counts in both INDEX.md and PALACE.md headers to reflect the current state.
+After the re-index scan, update the `Updated:` date and all counts in the INDEX.md header to reflect the current state.
 
-> **Why re-index on every pull?** INDEX.md and PALACE.md are derived data — they index what is in the `tickets/` and `shared/` directories. When a developer pushes their KB files, git merges the raw content files, but INDEX.md and PALACE.md may reflect different states from different developers. The re-index step makes the local derived files consistent with whatever files are actually present on disk after the pull, without overwriting anyone's entries.
+> **Why re-index on every pull?** INDEX.md is derived data — it indexes what is in the `tickets/` and `shared/` directories. When a developer pushes their KB files, git merges the raw content files, but INDEX.md may reflect a different state. The re-index step makes the local derived file consistent with whatever files are actually present on disk after the pull, without overwriting anyone's entries.
 
 **Report status:**
 
@@ -840,6 +840,7 @@ KB: {KNOWLEDGE_DIR}
     Shared entries : {P}  ({Q} re-indexed from disk after pull)
     Palace triggers: {R}
     Last updated   : {date from INDEX.md header or "new"}
+    Index file     : INDEX.md (Memory Palace + Master Index)
 ```
 
 #### 0b. Query (runs after Step 1 — ticket metadata available)
@@ -848,13 +849,13 @@ Once Step 1 has returned the ticket's **components** and **labels**, query in tw
 
 **Layer 1 — Memory Palace (primary, fast path):**
 
-1. Read `PALACE.md`.
+1. Read `INDEX.md`, navigate to the `## Memory Palace` section.
 2. Using the Room Directory table, identify which room(s) match the ticket's components and labels.
-3. For each matched room, read its `### Triggers` table (≤ 10 lines per room).
+3. For each matched room, scan its trigger table (≤ 10 lines per room).
 4. Any trigger that is semantically relevant to this ticket's topic is a **hit** — note its `KB Entry` and `File`.
 5. Read the full entry for each hit (grep for the section anchor in the linked file, read ±40 lines).
 
-**Layer 2 — INDEX.md fallback (if Palace yields no matches):**
+**Layer 2 — Master Index fallback (if Palace yields no matches):**
 
 ```bash
 grep -i "{COMPONENT}" "$KNOWLEDGE_DIR/INDEX.md"
@@ -2685,20 +2686,19 @@ For each extracted item:
 **Regression risks** (`shared/regression-risks.md`):
 - Grep for the area (class name, method name, or layer). If an existing risk covers it: append the new ticket reference to confirm the risk is still current. If new: append a new entry.
 
-#### 13d. Update PALACE.md
+#### 13d. Update INDEX.md — Memory Palace section
 
 For every new or updated knowledge entry produced in 13b–13c:
 
 1. **Determine which room(s)** the entry belongs to using the Room Directory (match the entry's components and labels).
-2. **Compose or reuse the trigger phrase** — if the entry has a `trigger:` field, use it. If the trigger already exists in the room's table, skip (do not duplicate). If new, append a row to the room's `### Triggers` table.
+2. **Compose or reuse the trigger phrase** — if the entry has a `trigger:` field, use it. If the trigger already exists in the room's table, skip (do not duplicate). If new, append a row to the room's trigger table under `## Memory Palace`.
 3. **Bump pattern frequency** in the relevant trigger line if the entry is a pattern recurrence (update the trigger's entry link to point to the bumped entry).
-4. Update the `Updated:` date and `Triggers:` count in the PALACE.md header.
 
-#### 13e. Update INDEX.md
+#### 13e. Update INDEX.md — Master Index section
 
-1. Add or update the ticket row in the `## Ticket Entries` table (include the `trigger:` field in the row).
+1. Add or update the ticket row in the `### Ticket Entries` table (include the `trigger:` field in the row).
 2. Add rows for any new shared entries created in 13c (updated entries do not get new rows).
-3. Update the header counts (`Ticket entries: N | Shared entries: N`).
+3. Update the header counts (`Triggers: N | Ticket entries: N | Shared entries: N`).
 4. Update the `Updated:` date.
 
 #### 13f. Publish KB
@@ -2712,7 +2712,7 @@ For every new or updated knowledge entry produced in 13b–13c:
    Architecture  : {N new / N updated}
    Patterns      : {N new / N bumped (PAT-XXX now seen {N}×)}
    Risks         : {N new / N updated}
-   Palace        : {N triggers added to rooms: {room names}}
+   INDEX.md (Palace): {N triggers added to rooms: {room names}}
    INDEX.md      : {N rows added}
    Git           : local mode — no distribution
 ```
@@ -2745,7 +2745,7 @@ On success display (encryption enabled):
    Architecture  : {N new / N updated}
    Patterns      : {N new / N bumped (PAT-XXX now seen {N}×)}
    Risks         : {N new / N updated}
-   Palace        : {N triggers added to rooms: {room names}}
+   INDEX.md (Palace): {N triggers added to rooms: {room names}}
    INDEX.md      : {N rows added / N re-indexed from disk}
    Encrypted     : {N} .md.enc files written
    Git           : pushed to origin/main ({short hash}) {or "branch created" on first push}
@@ -2762,7 +2762,7 @@ On success display (no encryption):
    Architecture  : {N new / N updated}
    Patterns      : {N new / N bumped (PAT-XXX now seen {N}×)}
    Risks         : {N new / N updated}
-   Palace        : {N triggers added to rooms: {room names}}
+   INDEX.md (Palace): {N triggers added to rooms: {room names}}
    INDEX.md      : {N rows added / N re-indexed from disk}
    Git           : pushed to origin/main ({short hash}) {or "branch created" on first push}
 ```
@@ -3553,13 +3553,13 @@ Apply the same rules as Step 13c in Dev Mode:
 - Add or update regression risks identified by Riley in `shared/regression-risks.md`
 - Append architecture insights discovered from reading the diff to `shared/architecture.md`
 
-#### R9d. Update PALACE.md
+#### R9d. Update INDEX.md — Memory Palace section
 
-Same process as Step 13d — for each new or updated entry, add triggers to the matched room(s), bump frequency counters for recurring patterns, update the Palace header counts.
+Same process as Step 13d — for each new or updated entry, add triggers to the matched room(s) in the `## Memory Palace` section of INDEX.md, bump frequency counters for recurring patterns.
 
-#### R9e. Update INDEX.md
+#### R9e. Update INDEX.md — Master Index section
 
-Same as Step 13e — add/update the ticket row, add new shared entries, update counts and date.
+Same as Step 13e — add/update the ticket row in `### Ticket Entries`, add new shared entries to `### Shared Knowledge Entries`, update header counts and date.
 
 #### R9f. Publish KB
 

@@ -306,14 +306,14 @@ The KB is a standalone git repository with a flat, predictable layout. Whether s
 prx-kb/                         ← root of the KB git repository
 ├── README.md                       ← auto-created on first push (repo description)
 │
-├── PALACE.md                       ← Memory Palace — primary retrieval layer
-│                                      Maps V1 system areas to named Rooms.
-│                                      Each knowledge entry has a vivid trigger phrase
-│                                      so agents recognise relevance in under 1 second.
-│
-├── INDEX.md                        ← Master index — fallback retrieval layer
-│                                      One row per knowledge entry (tickets + shared).
-│                                      Greppable by ticket key, component, label, trigger.
+├── INDEX.md                        ← Combined KB index (two sections):
+│                                      ## Memory Palace — primary retrieval layer.
+│                                        Maps V1 system areas to named Rooms.
+│                                        Each knowledge entry has a vivid trigger phrase
+│                                        so agents recognise relevance in under 1 second.
+│                                      ## Master Index — fallback retrieval layer.
+│                                        One row per knowledge entry (tickets + shared).
+│                                        Greppable by ticket key, component, label, trigger.
 │
 ├── tickets/                        ← One file per analysed or reviewed ticket
 │   ├── IV-3672.md                  ← Bug fix: alerts not resolved on case close
@@ -337,8 +337,7 @@ prx-kb/                         ← root of the KB git repository
 
 | File | Written by | Contents |
 |------|-----------|----------|
-| `PALACE.md` | Steps 13d / R9d | Per-room trigger tables. Each row: trigger phrase → KB entry ID → type → file path. Updated after every session. |
-| `INDEX.md` | Steps 13e / R9e | Master flat table of all entries. Columns: ticket/ID, date, type, components, labels, summary, trigger, file. |
+| `INDEX.md` | Steps 13d–13e / R9d–R9e | Two sections: `## Memory Palace` — per-room trigger tables (trigger phrase → KB entry ID → type → file); `## Master Index` — flat table of all entries (ticket/ID, date, type, components, labels, summary, trigger, file). |
 | `tickets/IV-XXXX.md` | Steps 13b / R9b | Full session record: problem, root cause, fix, business rules discovered, architecture insights, patterns observed, regression risks, related tickets, verdict (review sessions). |
 | `shared/business-rules.md` | Steps 13c / R9c | Domain invariants. Each entry confirmed or violated across sessions. |
 | `shared/architecture.md` | Steps 13c / R9c | Class hierarchy decisions, data flow knowledge, ownership rules. |
@@ -387,7 +386,7 @@ Encryption is not required when the KB is already in a private repository with p
 
 The KB is designed for teams of any size pushing concurrently. Here is how each scenario is handled:
 
-**The fundamental design decision:** INDEX.md and PALACE.md contain no information that is not already in `tickets/*.md` and `shared/*.md`. They are derived indexes. Because of this they are **always fully rebuilt from scratch after every pull** — not merged. This eliminates consistency problems regardless of how many developers push or in what order.
+**The fundamental design decision:** `INDEX.md` contains no information that is not already in `tickets/*.md` and `shared/*.md`. It is a derived index. Because of this it is **always fully rebuilt from scratch after every pull** — not merged. This eliminates consistency problems regardless of how many developers push or in what order.
 
 **`.gitattributes` — union merge for source files:**
 
@@ -397,7 +396,6 @@ The KB repo ships with a `.gitattributes` file (created on first setup) that tel
 tickets/*.md    merge=union
 shared/*.md     merge=union
 INDEX.md        merge=union
-PALACE.md       merge=union
 ```
 
 Union merge means: instead of marking `<<<<<<< conflict` markers, git keeps all lines from **both** sides. For append-only Markdown files (each developer adds new entries, no one edits others' entries) this is always correct. The full rebuild then de-duplicates any doubled rows.
@@ -411,7 +409,7 @@ Dev A  pushes tickets/IV-3672.md + shared update (their INDEX reflects only thei
 Dev B  pushes tickets/IV-3801.md + shared update (their INDEX reflects only their work)
 Dev C  pulls → git union-merges both INDEX.md versions (all rows kept)
                → full rebuild from tickets/*.md + shared/*.md
-               → INDEX.md and PALACE.md now reference IV-3672 AND IV-3801
+               → INDEX.md (Palace + Master Index) now references IV-3672 AND IV-3801
                ✅ Dev C sees the complete picture
 
 Dev D  pushes while Dev E is also pushing:
@@ -430,8 +428,8 @@ Dev D  pushes while Dev E is also pushing:
   git push origin main
 
 → Other developers pull on their next session
-→ git union-merge keeps all rows in INDEX.md and PALACE.md
-→ full rebuild adds IV-3910 and any new shared entries to INDEX and Palace
+→ git union-merge keeps all rows in INDEX.md
+→ full rebuild adds IV-3910 and any new shared entries to both sections of INDEX.md
 ✅ Manual push fully integrated — no broken state
 ```
 
@@ -454,7 +452,7 @@ No session is blocked by a push failure — the KB is always committed locally a
 
 #### Memory Palace — the primary retrieval layer
 
-The Memory Palace (`PALACE.md`) applies the **Method of Loci** to make prior knowledge instantly recognisable. The V1 system is divided into named **Rooms** (CASE ROOM, ALERT ROOM, FRONT ROOM, ENGINE ROOM, WORKER ROOM, VAULT). Each knowledge entry has a **vivid trigger phrase** — a 5–8 word memorable anchor. Agents read the Palace first, scan triggers for their matched rooms, and surface all relevant knowledge in ≤ 3 read operations regardless of how large the KB grows.
+The Memory Palace lives in the **`## Memory Palace` section of `INDEX.md`**. It applies the **Method of Loci** to make prior knowledge instantly recognisable. The V1 system is divided into named **Rooms** (CASE ROOM, ALERT ROOM, FRONT ROOM, ENGINE ROOM, WORKER ROOM, VAULT). Each knowledge entry has a **vivid trigger phrase** — a 5–8 word memorable anchor. Agents read the Palace section first, scan triggers for their matched rooms, and surface all relevant knowledge in ≤ 3 read operations regardless of how large the KB grows. If no Palace trigger matches, agents fall through to the `## Master Index` section of the same file.
 
 ```
 System Map (loci):
@@ -549,8 +547,7 @@ This runs in **both Dev Mode (Step 7b)** and **Review Mode (Step R5a)**. If no p
 | **Architecture** | `shared/architecture.md` | `[KB+ ARCH]` markers from Step 5/7/R5 + class hierarchy analysis |
 | **Patterns** | `shared/patterns.md` | `[KB+ PAT NEW]` for first occurrence, `[KB+ PAT BUMP]` to increment frequency |
 | **Regression risks** | `shared/regression-risks.md` | `[KB+ RISK]` from Riley and Alex, plus Step 9 usage search results |
-| **PALACE.md** | `PALACE.md` | New triggers added to matched rooms; pattern frequency counters bumped |
-| **INDEX.md** | `INDEX.md` | Master index updated with all new rows and counts |
+| **INDEX.md** | `INDEX.md` | Memory Palace section: new triggers added to matched rooms, pattern frequency counters bumped. Master Index section: all new rows added and counts updated. |
 
 #### Iterative growth in practice
 
@@ -562,7 +559,7 @@ Session 1 (IV-3672, bug)
            Riley emits [KB+ RISK] → "resolveCase() called from 4 screens"
   Step 7b: Morgan JIRA search → no past tickets found
   Step 13: writes IV-3672.md, BIZ-001, ARCH-001, PAT-001 (freq:1), RISK-001
-           Palace: 4 triggers added to CASE ROOM + ALERT ROOM
+           INDEX.md (Palace): 4 triggers added to CASE ROOM + ALERT ROOM
            Push → private KB repo
 
 Session 2 (IV-3801, review)
@@ -602,7 +599,7 @@ When you add the word `review` before or near the ticket key, the skill switches
 | **R6 — Consolidated Review Report** | Structured findings block listing all Critical, Major, and Minor issues with `file:line` references and specific fix recommendations, followed by Positives, Test Coverage Summary, and the ordered Conditions for Approval |
 | **R7 — Session Stats** | Elapsed time, estimated tokens, estimated cost |
 | **R8 — PDF Review Report** | Full report saved to `{REPORT_DIR}/{TICKET_KEY}-review.pdf` using the same three-method generation sequence (pandoc → Chrome headless → HTML fallback). Report includes all step output, the consolidated findings, and the Morgan verdict. |
-| **R9 — Knowledge Base Update** | Records review findings to `tickets/{TICKET_KEY}.md`; confirms or flags business rules; bumps pattern frequency counters for any Jordan patterns found in the diff; adds new regression risks and architecture insights to shared files; updates `INDEX.md` |
+| **R9 — Knowledge Base Update** | Records review findings to `tickets/{TICKET_KEY}.md`; confirms or flags business rules; bumps pattern frequency counters for any Jordan patterns found in the diff; adds new regression risks and architecture insights to shared files; updates both sections of `INDEX.md` (Memory Palace triggers + Master Index rows) |
 
 #### Review Verdict
 
@@ -1710,13 +1707,13 @@ claude plugin update prx@prx
 | 2 | KB — Private dedicated repository | **No data in any public repo.** In distributed mode the KB is pushed to a separate standalone git repository (`PRX_KB_REPO`) distinct from both the product repo and the skill repo. The team can use any private git hosting: company Bitbucket, GitHub Enterprise, GitLab, etc. This gives full access control — grant or revoke per developer independently. |
 | 3 | KB — Git distribution (Steps 0a / R0a) | **Auto-pull at session start** — `git pull origin main` on the local KB repo clone. **Auto-push at session end** (Steps 13f / R9f) — `git add . && git commit && git push origin main` on the same clone. No worktrees, no orphan branches — standard git on a dedicated repo. |
 | 4 | KB — Optional AES-256-CBC encryption | **`PRX_KB_KEY` (optional):** When set, all KB files are encrypted with AES-256-CBC + PBKDF2-SHA512 (310,000 iterations) before each push and decrypted to a session temp directory at session start. This provides defense-in-depth — useful if company policy requires data encrypted at rest or if there is any risk of the private repo being made public. When not set, plain Markdown is pushed directly (appropriate for well-controlled private repos). |
-| 5 | KB — Memory Palace (PALACE.md) | **New primary retrieval layer using Method of Loci.** The V1 system is divided into 6 named Rooms (🏠 CASE ROOM, 🚨 ALERT ROOM, 🖥️ FRONT ROOM, 🔧 ENGINE ROOM, ⚙️ WORKER ROOM, 🗄️ VAULT) matching the system layers. Each knowledge entry has a **vivid trigger phrase** (5–8 words, memorable). Agents read PALACE.md first, scan trigger tables for matched rooms, and surface all relevant knowledge in ≤ 3 read operations — regardless of KB size. Triggers are added to PALACE.md in Steps 13d / R9d and frequency counters are bumped on pattern recurrence. |
-| 6 | KB — INDEX.md (fallback layer) | `INDEX.md` gains a `Trigger` column matching PALACE.md. Used as fallback if Palace yields no matches. Greppable by component, label, ticket key, and trigger phrase. |
-| 7 | KB — Retrieval (Steps 0b / R0b) | **Two-layer retrieval**: (1) Palace — read PALACE.md, map ticket to rooms by component/label, scan room trigger tables; (2) INDEX fallback — grep INDEX.md by component/label. Max 5 ticket entries (most recent). All matching shared entries always included. Prior Knowledge block shown to the full engineering team before investigation begins. |
+| 5 | KB — Memory Palace (INDEX.md) | **Primary retrieval layer using Method of Loci.** The V1 system is divided into 6 named Rooms (🏠 CASE ROOM, 🚨 ALERT ROOM, 🖥️ FRONT ROOM, 🔧 ENGINE ROOM, ⚙️ WORKER ROOM, 🗄️ VAULT) matching the system layers. Each knowledge entry has a **vivid trigger phrase** (5–8 words, memorable). The Memory Palace lives in the `## Memory Palace` section of `INDEX.md`. Agents read this section first, scan trigger tables for matched rooms, and surface all relevant knowledge in ≤ 3 read operations — regardless of KB size. Triggers are added in Steps 13d / R9d and frequency counters are bumped on pattern recurrence. |
+| 6 | KB — INDEX.md (combined index) | `INDEX.md` holds both the Memory Palace (`## Memory Palace` — room trigger tables) and the Master Index (`## Master Index` — flat entry list). The Master Index is used as fallback if Palace triggers yield no matches. Greppable by component, label, ticket key, and trigger phrase. A single file replaces the former two-file design (PALACE.md + INDEX.md). |
+| 7 | KB — Retrieval (Steps 0b / R0b) | **Two-layer retrieval within a single file**: (1) Palace — read `INDEX.md`, navigate to `## Memory Palace`, map ticket to rooms by component/label, scan room trigger tables; (2) Master Index fallback — grep `## Master Index` section of `INDEX.md` by component/label. Max 5 ticket entries (most recent). All matching shared entries always included. Prior Knowledge block shown to the full engineering team before investigation begins. |
 | 8 | KB — External sources | **Confluence integration** — at Step 0b, queries `prevoirsolutions.atlassian.net/wiki/x/uACUAw` by component/label using the Atlassian MCP to find spec pages, business rules, and known limitations; results appear in Prior Knowledge under a `CONFLUENCE` section. **Bitbucket cross-check** — KB `file:line` references are verified against the live `development` branch at `bitbucket.org/prevoirsolutionsinformatiques/insight`; stale references are flagged `⚠️` before the investigation team acts on them. |
-| 9 | KB — Dev update (Steps 13b–13f) | Writes `tickets/{TICKET_KEY}.md` with trigger + rooms metadata; appends to shared files; updates PALACE.md with new triggers; updates INDEX.md; pushes to private KB repo. |
+| 9 | KB — Dev update (Steps 13b–13f) | Writes `tickets/{TICKET_KEY}.md` with trigger + rooms metadata; appends to shared files; updates both sections of `INDEX.md` (Memory Palace triggers + Master Index rows); pushes to private KB repo. |
 | 10 | KB — Review update (Steps R9b–R9f) | Same as Step 13 but records review verdict, confirmed/violated business rules, and QA gaps as regression risks; bumps pattern frequency counters; pushes to private KB repo. |
-| 11 | KB — Iterative growth | Pattern frequency counters increment each recurrence. After 3 occurrences of the same pattern, Morgan leads with it as the primary hypothesis. Business rules accumulate and are confirmed or flagged violated across all sessions. The Palace grows triggers in the correct rooms automatically. |
+| 11 | KB — Iterative growth | Pattern frequency counters increment each recurrence. After 3 occurrences of the same pattern, Morgan leads with it as the primary hypothesis. Business rules accumulate and are confirmed or flagged violated across all sessions. The Memory Palace section of INDEX.md grows triggers in the correct rooms automatically. |
 | 12 | KB — Headless mode | Pull, initialise, query, write, and push all run in headless mode. Push failures log `KB_PUSH_WARN:` and do not block session completion. |
 
 ---

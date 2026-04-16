@@ -106,12 +106,18 @@ claude plugin list   # should show dodogeny@prx
 
 ### 2. Install `uvx` (required for the Jira MCP server)
 
-```bash
-# macOS / Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
+`uvx` is part of the `uv` Python package manager. The commands below check whether it is already installed and skip the install if so.
 
-# Windows (PowerShell)
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+**macOS / Linux:**
+```bash
+command -v uvx &>/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+**Windows (PowerShell):**
+```powershell
+if (-not (Get-Command uvx -ErrorAction SilentlyContinue)) {
+  powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+}
 ```
 
 ---
@@ -120,7 +126,11 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 
 This is the **only file you need to edit**. Everything else — the MCP server, the skill, and the polling script — reads from it automatically.
 
+Copy `.env.example` to `.env` **in the same folder where you cloned this repo** (the project root, next to this README):
+
 ```bash
+# Run this from the project root
+cd ~/.claude/plugins/marketplaces/prx   # or wherever you cloned the repo
 cp .env.example .env
 ```
 
@@ -171,11 +181,12 @@ Copy `.env.example` to `.env` — Claude Code loads it automatically from the pr
 
 | Variable | Description |
 |----------|-------------|
+| `PRX_REPO_DIR` | Absolute path to your local repository clone, e.g. `/home/alice/projects/myrepo`. The skill creates branches here and searches this directory for code. |
 | `JIRA_URL` | Your Atlassian base URL, e.g. `https://yourcompany.atlassian.net` |
 | `JIRA_USERNAME` | Your Atlassian account email |
 | `JIRA_API_TOKEN` | Jira API token — generate at [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens) |
 
-> These three are also required in `.mcp.json` for the Atlassian MCP server. Setting them in `.env` as well means the polling script and any other tooling that reads env vars will also have access.
+> `JIRA_URL`, `JIRA_USERNAME`, and `JIRA_API_TOKEN` are read by the Atlassian MCP server directly from the environment. `.mcp.json` (already committed, no credentials) just specifies the command — no editing needed.
 
 ### Knowledge Base
 
@@ -197,7 +208,7 @@ Copy `.env.example` to `.env` — Claude Code loads it automatically from the pr
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CLAUDE_REPORT_DIR` | `$HOME/Documents/DevelopmentTasks/Claude-Analyzed-Tickets` | Folder where PDF/HTML reports are saved. Created automatically if it does not exist. |
+| `CLAUDE_REPORT_DIR` | `$HOME/.dev-skill/reports` | Folder where PDF/HTML reports are saved. Created automatically if it does not exist. |
 
 ### Email Delivery (optional)
 

@@ -41,9 +41,21 @@ PRX_SMTP_PASS      = (required when PRX_EMAIL_TO is set — SMTP password or app
 
 **`KB_MODE=distributed`:** KB lives in a dedicated **private** git repository owned and controlled by the team (`PRX_KB_REPO`). The repo is cloned locally at `PRX_KB_LOCAL_CLONE`. KB access is governed by the repo's own permissions — a company Bitbucket, GitHub Enterprise, or GitLab instance ensures only authorised team members can read or write the knowledge base. No sensitive data is ever pushed to any public repository. If `PRX_KB_KEY` is also set, all files are AES-256-CBC encrypted before each push, adding a defense-in-depth layer. If `PRX_KB_KEY` is not set, plain Markdown is pushed directly — acceptable when the repo's access controls are sufficient.
 
-Use `REPO_DIR` wherever the V1 repository path is referenced.
+Use `REPO_DIR` wherever the repository path is referenced.
 Use `KNOWLEDGE_DIR` wherever the knowledge base path is referenced.
 Use `KB_MODE` to conditionally execute sync and encryption steps.
+
+**Pre-flight checks — run these via Bash before any step:**
+
+```bash
+# 1. REPO_DIR must be set
+[ -z "$PRX_REPO_DIR" ] && echo "STOP: PRX_REPO_DIR is not set. Add it to your .env file: PRX_REPO_DIR=/absolute/path/to/your/repo" && exit 1
+
+# 2. REPO_DIR must exist and be a git repository
+[ ! -d "$PRX_REPO_DIR/.git" ] && echo "STOP: Directory '$PRX_REPO_DIR' is not a git repository (or does not exist). Check PRX_REPO_DIR in your .env file." && exit 1
+```
+
+If either check fails, stop immediately and show the error message to the developer — do not proceed to Step 0.
 
 ---
 
@@ -2352,10 +2364,10 @@ After Step 10 is complete, generate a full PDF report of the analysis and save i
 Resolve the output folder using this priority order:
 
 1. If the environment variable `CLAUDE_REPORT_DIR` is set, use it
-2. Otherwise default to: `$HOME/Documents/DevelopmentTasks/Claude-Analyzed-Tickets/`
+2. Otherwise default to: `$HOME/.dev-skill/reports/`
 
 ```bash
-REPORT_DIR="${CLAUDE_REPORT_DIR:-$HOME/Documents/DevelopmentTasks/Claude-Analyzed-Tickets}"
+REPORT_DIR="${CLAUDE_REPORT_DIR:-$HOME/.dev-skill/reports}"
 mkdir -p "$REPORT_DIR"
 ```
 
@@ -3507,7 +3519,7 @@ After Step R6 is complete, generate a PDF review report and save it to disk.
 Same as Step 12a in Dev Mode:
 
 ```bash
-REPORT_DIR="${CLAUDE_REPORT_DIR:-$HOME/Documents/DevelopmentTasks/Claude-Analyzed-Tickets}"
+REPORT_DIR="${CLAUDE_REPORT_DIR:-$HOME/.dev-skill/reports}"
 mkdir -p "$REPORT_DIR"
 ```
 

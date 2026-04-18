@@ -44,6 +44,17 @@ AUTO_MODE          = (optional — Y/YES/true to bypass all interactive prompts 
                              the full workflow automatically; default: N. In auto mode the skill applies safe
                              defaults at every gate, does not ask for confirmation, and automatically applies
                              the proposed fix to the newly created feature branch.)
+
+PRX_JIRA_PROJECT   = (optional — Jira project key used to scope ticket polling (e.g. IV).
+                             When set, poll-jira.sh adds `project = {PRX_JIRA_PROJECT}` to the JQL filter
+                             so only tickets from that project trigger analysis. Omit to poll all projects.)
+
+PRX_REPORT_VERBOSITY      = (optional — controls terminal output verbosity; default: full.
+                               full    → every structured block, all panel dialogue, verbatim debate rounds
+                               compact → structured blocks intact (Root Cause, Enhancement Statement, Fix,
+                                         Morgan's verdicts) but panel narrative condensed to bullet summaries;
+                                         the PDF always contains full content regardless of this setting
+                               minimal → structured blocks only — no panel narrative, no debate, no check-ins)
 ```
 
 **`KB_MODE=local` (default):** KB lives in the developer's home directory. No git sync. No encryption. Private to one machine.
@@ -826,8 +837,9 @@ When `AUTO_MODE_ON=1`, the skill runs in **analysis-only mode** with no interact
 | Step 7h — Morgan verdict *(Bug only)* | Morgan scores and declares adopted root cause | Verdict runs automatically; proceed with highest-scoring hypothesis |
 | Step 8c — Morgan fix review | Morgan vets the proposed fix | Review runs automatically; if REWORK REQUIRED, revise once and re-run; if still failing, proceed with `⚠️ UNRESOLVED — developer review required` |
 | Step 8d — Apply fix prompt | Ask yes / no / partial | **Default to no** — propose the fix only; do not call Edit or modify any files |
+| Step 12e — Email report | Send report to `PRX_EMAIL_TO` if set | **Always runs** — email is sent automatically whenever `PRX_EMAIL_TO` is configured; no interactive element |
 
-In headless mode, Steps 1–10 run and produce full output with all interactive gates bypassed using safe defaults. Steps 11 and 12 (session stats + PDF report) run as normal so the PDF is saved to disk.
+In headless mode, Steps 1–10 run and produce full output with all interactive gates bypassed using safe defaults. Steps 11 and 12 (session stats + PDF report) run as normal so the PDF is saved to disk. Email (Step 12e) fires automatically if `PRX_EMAIL_TO` is set.
 
 ---
 
@@ -857,6 +869,15 @@ Do NOT invoke for general code questions unrelated to a Jira ticket.
 ## Workflow Steps
 
 Execute all steps **in order**. Do not skip steps. Present output to the developer as you complete each one.
+
+**Output verbosity** — resolve once at session start:
+```bash
+PRX_REPORT_VERBOSITY="${PRX_REPORT_VERBOSITY:-full}"
+```
+Apply throughout:
+- `full` — every structured block, all panel dialogue, verbatim debate rounds (default)
+- `compact` — all structured blocks intact (Root Cause Statement, Enhancement Statement, Fix, Morgan's verdicts, Riley's assessment); panel narrative (mid-point check-ins, debate, Morgan's briefing prose) condensed to bullet summaries. **The PDF always receives full content regardless of this setting.**
+- `minimal` — structured blocks only; no panel narrative, no debate round, no check-in dialogue
 
 ---
 
@@ -1044,6 +1065,17 @@ KB: {KNOWLEDGE_DIR}
     Index file     : INDEX.md (Memory Palace + Master Index)
 ```
 
+**Lightweight KB integrity sweep** — immediately after the status block above, run a quick background pass over `shared/*.md` to flag entries with file:line references that are obviously stale (file no longer exists). Budget: ≤ 5 targeted `ls` or `grep` checks — do not read whole files.
+
+```bash
+# For each file:line reference found in shared KB files, check the file still exists:
+grep -rh "file:" "$KNOWLEDGE_DIR/shared/" 2>/dev/null | grep -oP '[a-zA-Z/._-]+\.(java|py|js|ts|sql|xml)' | sort -u | while read f; do
+  [ ! -f "$REPO_DIR/$f" ] && echo "STALE_REF: $f"
+done
+```
+
+Any `STALE_REF` lines are held in memory for the session. These entries will be auto-healed in Step 13c after the session analysis is complete. Do not interrupt Step 0 for this — note `{N} stale file references flagged for auto-heal in Step 13c` and continue.
+
 #### 0b. Query (runs after Step 1 — ticket metadata available)
 
 Once Step 1 has returned the ticket's **components** and **labels**, query in two layers:
@@ -1132,10 +1164,19 @@ If Bitbucket cross-check skipped: note `Bitbucket: skipped — verify file:line 
 Use `mcp__jira__get_issue` with the ticket key extracted from the input. Request only the fields needed: `summary`, `issuetype`, `priority`, `status`, `assignee`, `reporter`, `labels`, `components`, `fixVersions`, `versions`, `description`, `comment`, `attachment`. Do not fetch sprint metadata, change logs, epic links, or watcher lists.
 
 **If the MCP call fails** (authentication error, ticket not found, MCP server not running):
-- State the exact error returned
-- Do not proceed to Step 2
-- Instruct the developer to verify: (1) the Atlassian MCP is running, (2) the API token is valid, (3) the ticket key is correct
-- Stop here until the developer confirms the issue is resolved
+
+Retry with exponential backoff before giving up — transient network issues should not abort the session:
+
+```
+Attempt 1 — immediate
+Attempt 2 — wait 30 s
+Attempt 3 — wait 30 s
+```
+
+If all three attempts fail:
+- State the exact error returned by the last attempt
+- In **interactive mode**: stop and instruct the developer to verify: (1) the Atlassian MCP is running, (2) the API token is valid, (3) the ticket key is correct. Do not proceed until the developer confirms the issue is resolved.
+- In **headless mode** (`AUTO_MODE_ON=1`): print `HEADLESS_ERROR: MCP unavailable after 3 attempts — {error}` and exit immediately.
 
 Display:
 - **Summary** (ticket title)
@@ -1169,7 +1210,17 @@ If the ticket type is a **Story/Enhancement**, explicitly state:
 
 Fetch all issue links from the ticket (e.g. "is blocked by", "blocks", "relates to", "is cloned from", "duplicates", "is caused by", parent/child epic links, sub-task relationships).
 
-For each linked ticket found:
+**Lazy fetch — two-phase approach to avoid unnecessary full fetches:**
+
+Phase 1 — fetch summary + status only for all linked tickets. Rate each for relevance:
+- **High relevance**: same component as primary ticket; or `Closed/Resolved` with a root cause documented; or link type is `is caused by` / `is cloned from` / `duplicates`
+- **Low relevance**: `relates to` with a different component; `blocks` / `is blocked by` with no shared component; `Open` with no description
+
+Fetch full details (Phase 2) **only for High-relevance tickets**. For Low-relevance tickets, record the one-line summary and status only — do not fetch full description or attachments.
+
+State: `Linked tickets: {N} found — {M} High-relevance (full fetch), {P} Low-relevance (summary only)`
+
+For each **High-relevance** linked ticket:
 1. Retrieve the full ticket details (summary, description, status, type, resolution, attachments).
 2. Extract any context that enriches the current analysis:
    - Prior investigations or findings already documented
@@ -1194,6 +1245,15 @@ If there are no linked tickets, state: "No linked tickets found."
 Carry all relevant findings from linked tickets forward into the **Prior Investigation Summary** in Step 3.
 
 #### Diagnostic Artefact Analysis
+
+**Attachment triage pass** — before downloading or deeply analysing any attachment, classify each one in one line (name, type, size, direct relevance to the problem statement). Only deep-analyse attachments rated **directly relevant**:
+
+| Relevance | Criteria | Action |
+|-----------|----------|--------|
+| **Direct** | Screenshot of the reported error; log containing the exception; config file for the failing component | Deep-analyse |
+| **Indirect** | Generic UI screenshot unrelated to the error path; log from a different service; diagram of an unaffected flow | Note filename and type only — state "skipped (indirect)" |
+
+State: `Attachments: {N} total — {M} directly relevant (deep-analyse), {P} indirect (noted only)`
 
 Download and analyse all qualifying attachments from the ticket.
 
@@ -1429,6 +1489,13 @@ After building the file map, assess your certainty:
 
 State the confidence level explicitly: `File map confidence: High — proceeding.`
 
+**Opportunistic KB stale validation** — for each file now confirmed in the file map, cross-check any KB entries (from the Step 0b Prior Knowledge block) that referenced that file. Since you are already reading these files, this costs zero extra ops:
+- If a KB entry's `file:line` still matches → mark `VALID` (no action needed)
+- If the line content has shifted → calculate new line, flag `RELOCATED` for Step 13c auto-heal
+- If the symbol is gone from the file → flag `STALE` for Step 13c to mark `[DELETED]`
+
+Emit inline: `KB cross-check: {N} refs validated, {M} flagged for auto-heal` and continue — do not pause the step.
+
 #### KB Annotations — Step 5
 
 While building the file map, emit `[KB+]` markers for any architecture or business knowledge discovered:
@@ -1593,6 +1660,32 @@ If confidence is **Low** (insertion points unclear after reading the code), stop
 
 ---
 
+#### 7b-pre. Complexity Gate *(Bug tickets only)*
+
+Before convening the full panel, Morgan performs a **2-op pre-assessment** to decide whether the full panel is needed or a fast-path is sufficient.
+
+**Pre-assessment (≤ 2 ops):**
+1. Count files in the Step 5 file map and run a quick caller count: `grep -r "{primary_method}" "$REPO_DIR" | wc -l`
+2. Check whether Step 0b surfaced a Prior Knowledge hit with High confidence on the same component and pattern
+
+**Complexity verdict:**
+
+| Signal | Fast-path? |
+|--------|-----------|
+| ≤ 2 files in file map AND ≤ 5 callers AND KB hit (High confidence, same component + pattern) | **Yes** — fast-path |
+| Any signal outside those bounds | **No** — full panel |
+
+**Fast-path mode** (skips mid-point check-in and full cross-examination):
+- KB short-circuit: Morgan opens with `"KB identifies [Pattern/Rule] as likely mechanism — engineers confirm or rule out, 4 ops each maximum. No fresh investigation needed unless the evidence contradicts KB."`
+- Each engineer submits one concise hypothesis block (no structured investigation narrative)
+- Riley gives a one-line risk rating instead of a full Testing Impact Assessment
+- Morgan's verdict in 3 sentences; no formal debate round
+- Emit `[FAST-PATH]` tag in the output so the PDF labels it clearly
+
+State: `Complexity gate: {Fast-path / Full panel} — {one-line reason}`
+
+---
+
 #### Engineering Panel *(Bug tickets only — 7b through 7i)*
 
 **The team:**
@@ -1707,7 +1800,9 @@ Morgan reads the ticket summary, the file map from Step 5, the replication guide
 
 #### 7c. Parallel Investigation — Engineers and Tester Investigate (4-minute block)
 
-Each engineer has a **4-minute investigation window**, capped at **8 targeted grep/read operations** before committing to a hypothesis. Riley runs a parallel impact assessment capped at **6 operations**. The budget enforces focus: reach defensible conclusions quickly, not exhaustively.
+Each engineer has a **4-minute investigation window**, capped at **8 targeted grep/read operations** before committing to a hypothesis. The budget enforces focus: reach defensible conclusions quickly, not exhaustively.
+
+**Riley — conditional timing:** Riley does NOT run in parallel by default. After the hypothesis round, Morgan checks whether all three engineers converge on the same root cause with High confidence. If yes, Riley gives a **one-line risk rating** only (no full Testing Impact Assessment block). If any engineer diverges or confidence is Medium/Low, Riley runs the full 6-op Testing Impact Assessment before Morgan's cross-examination.
 
 **Budget rules (apply to Alex, Sam, and Jordan):**
 - **High-confidence evidence found in ≤ 4 ops?** Stop immediately and go to mid-point check-in. Do not over-investigate.
@@ -2208,6 +2303,12 @@ ALTER TABLE ...
 
 ### Step 9 — Impact Analysis
 
+**Context pruning** — before beginning Step 9, explicitly summarise the Engineering Panel output down to its essential residue for the remaining steps. The verbatim debate, cross-examination, and scoring are preserved in the PDF and do not need to remain active in the context window:
+
+> *Panel summary retained for Steps 9–12: Root Cause Statement + Team Note + Morgan's Fix Review verdict. Full panel transcript is in the PDF.*
+
+This keeps the context window lean for the grep-heavy impact analysis steps.
+
 Assess the full consequences of the proposed fix across the entire application. This step requires active codebase searching — do not rely on assumptions. Use Grep to find every reference to changed symbols before drawing conclusions.
 
 #### 9a. Files Changed
@@ -2234,11 +2335,12 @@ For each symbol changed, produce a reference table:
 | `pendingAlertResolve` | field | local to `CaseManager` | `CaseManager.java` only |
 
 Rules:
-- If a changed method is `public` or `protected` — always search for all callers across the full repo
-- If a changed method is `private` — confirm it is only called within the same class
-- If a changed interface or abstract method — find all implementing classes
-- If a DB column or table is changed — grep for all SQL references and ORM mappings to that table/column
-- If a GWT RPC service method signature changes — find all client call sites and the corresponding server-side implementation
+- If a changed method is `private` — **skip the codebase-wide grep**; confirm it is only called within the same class (one targeted read). Do not search the full repo for private symbols — it is redundant and wastes ops.
+- If a changed method is `package-private` (no modifier in Java) — grep only within the same package directory, not the full repo.
+- If a changed method is `public` or `protected` — grep only the modules likely to call it, derived from the Step 5 file map (e.g. if the fix is in `fcfrontend/`, search `fcfrontend/` and `fcbuild/` first; only expand to the full repo if references are found that suggest broader coupling).
+- If a changed interface or abstract method — find all implementing classes.
+- If a DB column or table is changed — grep for all SQL references and ORM mappings to that table/column.
+- If a GWT RPC service method signature changes — find all client call sites and the corresponding server-side implementation.
 
 #### 9c. Application-Wide Impact
 
@@ -2399,6 +2501,25 @@ Resolve the output folder using this priority order:
 REPORT_DIR="${CLAUDE_REPORT_DIR:-$HOME/.dev-skill/reports}"
 mkdir -p "$REPORT_DIR"
 ```
+
+**PDF tool pre-check** — before generating Markdown, verify which conversion method is available and report it upfront rather than discovering failures at conversion time:
+
+```bash
+PDF_METHOD=""
+if command -v pandoc &>/dev/null; then
+  PDF_METHOD="pandoc"
+elif ls "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" &>/dev/null \
+     || command -v google-chrome &>/dev/null \
+     || command -v chromium &>/dev/null; then
+  PDF_METHOD="chrome"
+else
+  PDF_METHOD="html-fallback"
+fi
+echo "PDF method: $PDF_METHOD"
+```
+
+State the detected method before proceeding. If `html-fallback`, warn the developer immediately:
+> "⚠️ Neither pandoc nor Chrome found — report will be saved as HTML. Install pandoc (`brew install pandoc`) or Chrome to enable PDF output."
 
 #### 12b. Generate Markdown Source
 
@@ -2948,6 +3069,22 @@ For each extracted item:
 **Regression risks** (`shared/regression-risks.md`):
 - Grep for the area (class name, method name, or layer). If an existing risk covers it: append the new ticket reference to confirm the risk is still current. If new: append a new entry.
 
+**Stale reference auto-heal** — for every `shared/*.md` entry that contains a `file:line` reference, validate and heal as follows (opportunistically, using only files already read or grepped during this session to avoid extra ops):
+
+```
+For each file:line reference encountered in KB entries:
+  1. grep -n "{method_or_class_name}" "$REPO_DIR/{file}"
+  2. VALID     → found at same line ± 5   → no change
+  3. RELOCATED → found at different line  → update file:line; append [RELOCATED {skill_version}]
+  4. MOVED     → not in that file; grep across REPO_DIR finds it elsewhere
+                → update to new file:line; append [RELOCATED {skill_version}]
+  5. DELETED   → symbol not found anywhere in REPO_DIR
+                → mark entry [DELETED {skill_version}]; retain pattern/rule text
+                   (knowledge of why it existed is still valuable even if the symbol is gone)
+```
+
+Emit a `[KB+ ARCH]` or `[KB+ RISK]` correction marker for each entry modified so Step 13d picks it up for INDEX.md.
+
 #### 13d. Update INDEX.md — Memory Palace section
 
 For every new or updated knowledge entry produced in 13b–13c:
@@ -3158,6 +3295,26 @@ Then list every changed file with its change type (modified / added / deleted) a
 | `fcfrontend/.../CaseManager.java` | Modified | +42 −18 |
 
 If the diff is empty (no changes found), state: "No code changes found on this branch relative to `{BASE_BRANCH}`. Confirm the branch name and base branch are correct." and stop.
+
+**Large diff handling** — if the total lines changed across all files exceeds **500 lines**, do not read the full diff in one block. Instead:
+
+1. **Pre-read pass**: read the `--stat` output and the commit log only (already done above).
+2. **Reviewer file assignment**: assign each changed file to the reviewer whose mandate best covers it:
+   - Alex → files with significant git history changes or commit-message anomalies
+   - Sam → files containing the core logic change (the primary fix path)
+   - Jordan → files with structural changes, new abstractions, or interface modifications
+   - Riley → test files; any file touched by more than 3 callers (regression surface)
+3. Each reviewer reads **only their assigned files** via targeted reads — not the full diff.
+4. State the assignment before review begins:
+
+```
+Large diff detected: {N} total lines changed across {M} files.
+File assignments:
+  Alex  → {file list}
+  Sam   → {file list}
+  Jordan → {file list}
+  Riley → {file list}
+```
 
 ---
 

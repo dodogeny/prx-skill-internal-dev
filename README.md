@@ -493,6 +493,11 @@ claude plugin list
 - **Email reports:** `send-report.py` delivers PDF/HTML analysis and review reports via SMTP immediately after saving. Configure via `PRX_EMAIL_TO` and `PRX_SMTP_*` env vars.
 - **PR Review diff:** Review mode (Step R4) now uses `git diff` to detect changed files precisely, restricting the review panel to only the files actually modified on the feature branch.
 - **Plugin registry:** Published as `prx@dodogeny`.
+- **Token efficiency:** Engineering Panel complexity gate (Step 7b-pre) fast-paths simple fixes; context pruned before Step 9; Riley made conditional on engineer divergence; KB integrity sweep at session start.
+- **Polling script:** `--force TICKET-KEY` re-queues a previously seen ticket; `PRX_JIRA_PROJECT` scopes JQL to a single project.
+- **Configurability:** `PRX_REPORT_VERBOSITY` (full/compact/minimal) controls terminal output without affecting PDF content; `PRX_ATTACHMENT_MAX_MB` caps non-image attachment size (default: unlimited).
+- **Resilience:** MCP retry-with-backoff (3 attempts, 30 s apart) before failing; PDF tool pre-check at session start with graceful fallback.
+- **KB stale detection:** Opportunistic validation during file reads; auto-heal writes `RELOCATED`/`DELETED` tags in Step 13c rather than silently leaving broken references.
 
 ### v1.2.0
 

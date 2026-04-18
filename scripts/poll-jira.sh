@@ -14,6 +14,29 @@ CREDENTIALS_FILE="$SCRIPT_DIR/.jira-credentials"
 CACHE_FILE="$SCRIPT_DIR/.jira-seen-tickets"
 LOG_FILE="$SCRIPT_DIR/poll-jira.log"
 
+# ── CLI arguments ─────────────────────────────────────────────────────────────
+# --force TICKET-KEY   Remove a ticket from the seen-cache so it is re-processed
+#                      even if it was analysed previously.  Useful after a ticket
+#                      is significantly updated (new attachments, root-cause found).
+FORCE_TICKET=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --force)
+      FORCE_TICKET="${2:-}"
+      if [ -z "$FORCE_TICKET" ]; then
+        echo "Usage: poll-jira.sh [--force TICKET-KEY]" >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      echo "Usage: poll-jira.sh [--force TICKET-KEY]" >&2
+      exit 1
+      ;;
+  esac
+done
+
 # JIRA_BASE is loaded from .jira-credentials (JIRA_URL) — see credentials file
 JQL='assignee = currentUser() AND status in ("To Do","Open","Parked","Blocked") ORDER BY updated DESC'
 
@@ -74,6 +97,11 @@ JIRA_TOKEN="${JIRA_TOKEN:-${JIRA_API_TOKEN:-}}"
 # JIRA_URL / JIRA_BASE — accepted from either source
 JIRA_BASE="${JIRA_URL:-}"
 
+# Scope JQL to a specific project when PRX_JIRA_PROJECT is set in .env.
+if [ -n "${PRX_JIRA_PROJECT:-}" ]; then
+  JQL="project = ${PRX_JIRA_PROJECT} AND ${JQL}"
+fi
+
 if [ -z "$JIRA_BASE" ]; then
   echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: JIRA_URL is not set. Add it to .env: JIRA_URL=https://yourcompany.atlassian.net" >> "$LOG_FILE"
   notify "Dev Skill" "JIRA_URL not set — add it to .env and retry."
@@ -87,6 +115,16 @@ if [ -z "$JIRA_USER" ] || [ -z "$JIRA_TOKEN" ]; then
 fi
 
 touch "$CACHE_FILE"
+
+# ── Handle --force flag ───────────────────────────────────────────────────────
+if [ -n "$FORCE_TICKET" ]; then
+  if grep -qx "$FORCE_TICKET" "$CACHE_FILE" 2>/dev/null; then
+    sed -i.bak "/^${FORCE_TICKET}$/d" "$CACHE_FILE" && rm -f "${CACHE_FILE}.bak"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') --force: removed $FORCE_TICKET from seen-cache; will re-process." >> "$LOG_FILE"
+  else
+    echo "$(date '+%Y-%m-%d %H:%M:%S') --force: $FORCE_TICKET was not in seen-cache; will process normally." >> "$LOG_FILE"
+  fi
+fi
 
 # ── Build Jira MCP config for the Claude invocation ───────────────────────────
 # The Atlassian MCP is scoped to the insight project directory; poll-jira.sh

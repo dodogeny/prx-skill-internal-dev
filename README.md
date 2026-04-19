@@ -488,6 +488,7 @@ claude plugin list
 
 ### v1.2.1
 
+- **Core Mental Map:** New `core-mental-map/` KB folder — a compressed, always-growing codebase model (architecture, business logic, data flows, tech stack, gotchas) contributed by agents every session via `[CMM+]` markers. Agents read it at session start, cross-check against live code, and write corrections or confirmations back — so the team's collective understanding compounds with every ticket worked.
 - **Knowledge Base:** Merged `PALACE.md` and `INDEX.md` into a single `INDEX.md` file with two sections (`## Memory Palace` and `## Master Index`). Simplifies retrieval — one file, two layers.
 - **Distributed KB — first contributor:** Added checks to ensure `PRX_KB_KEY` is set when required (encrypted repos) and that the first-time contributor flow handles an existing remote branch gracefully.
 - **Email reports:** `send-report.py` delivers PDF/HTML analysis and review reports via SMTP immediately after saving. Configure via `PRX_EMAIL_TO` and `PRX_SMTP_*` env vars.

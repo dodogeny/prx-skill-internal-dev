@@ -83,6 +83,8 @@ If either check fails, stop immediately and show the error message to the develo
 
 The knowledge base is a shared, persistent store that grows richer after every Dev and Review session. Retrieval is grep on plain Markdown — near-instant, no external dependencies. The storage and distribution model is controlled by `KB_MODE` (defined in Configuration).
 
+**Agents get smarter with every session.** The mechanism is compounding: Session 1 discovers a business rule and writes it. Session 2 reads that rule, applies it immediately rather than re-discovering it, and writes a new architecture insight. Session 3 reads both and contributes a gotcha. After dozens of sessions the agents arrive at a new ticket already knowing the relevant business rules, the risky call sites, the recurring patterns, and the system's architecture — the same mental model a senior engineer would have built over months. This is not incidental: it is the explicit goal of every KB read and write step. **Reading and writing the KB is never optional.** An agent that skips either step makes the whole team less capable on the next ticket.
+
 ### Storage Modes
 
 | Mode | KB location on disk | Distribution | Access control | Encryption | Agent read/write path |
@@ -130,7 +132,7 @@ openssl enc -d -aes-256-cbc -pbkdf2 -iter 310000 -md sha512 \
 **Batch decrypt (Step 0a — pull to session temp dir):**
 ```bash
 KB_WORK_DIR="/tmp/dev-skill-kb-$$"
-mkdir -p "$KB_WORK_DIR/tickets" "$KB_WORK_DIR/shared"
+mkdir -p "$KB_WORK_DIR/tickets" "$KB_WORK_DIR/shared" "$KB_WORK_DIR/core-mental-map"
 find "$KNOWLEDGE_DIR" -name "*.md.enc" | while read f; do
   rel="${f#$KNOWLEDGE_DIR/}"           # e.g. tickets/IV-3672.md.enc
   out="$KB_WORK_DIR/${rel%.enc}"       # e.g. /tmp/dev-skill-kb-$$/tickets/IV-3672.md
@@ -185,16 +187,107 @@ _(Applies to `KB_MODE=distributed`.)_
 ├── INDEX.md    (or INDEX.md.enc)      ← combined index: Memory Palace (primary) + Master Index (fallback)
 ├── tickets/                            ← per-ticket files (one per analysed / reviewed ticket)
 │   └── IV-XXXX.md  (or .md.enc)
-└── shared/                             ← accumulated team knowledge
-    ├── business-rules.md  (or .md.enc) ← domain invariants discovered across all tickets
-    ├── architecture.md    (or .md.enc) ← class hierarchies, data flows, ownership decisions
-    ├── patterns.md        (or .md.enc) ← recurring bug/fix patterns with frequency counters
-    └── regression-risks.md (or .md.enc)← known fragile areas requiring care on every change
+├── shared/                             ← accumulated team knowledge
+│   ├── business-rules.md  (or .md.enc) ← domain invariants discovered across all tickets
+│   ├── architecture.md    (or .md.enc) ← class hierarchies, data flows, ownership decisions
+│   ├── patterns.md        (or .md.enc) ← recurring bug/fix patterns with frequency counters
+│   └── regression-risks.md (or .md.enc)← known fragile areas requiring care on every change
+└── core-mental-map/                    ← compressed codebase mental model (contributed by all agents)
+    ├── INDEX.md   (or INDEX.md.enc)   ← quick index: what topics exist, entry counts, last-updated
+    ├── architecture.md  (or .md.enc)  ← system layers, component boundaries, key class relationships
+    ├── business-logic.md (or .md.enc) ← core domain invariants and state machine rules
+    ├── data-flows.md    (or .md.enc)  ← key data flows, RPC contracts, write paths
+    ├── tech-stack.md    (or .md.enc)  ← technologies, frameworks, key library choices
+    └── gotchas.md       (or .md.enc)  ← non-obvious couplings, footguns, edge-case traps
 ```
 
 In `KB_MODE=local` all files are plain `.md`. In `KB_MODE=distributed` all files on disk are `.md.enc`; the plain `.md` files exist only in `KB_WORK_DIR=/tmp/dev-skill-kb-{PID}/` during the session.
 
 > **Note:** `PALACE.md` no longer exists as a separate file. The Memory Palace (room trigger tables) and the Master Index (flat entry list) are both sections within `INDEX.md`.
+
+---
+
+### Core Mental Map
+
+The Core Mental Map is a **compressed, always-growing model of the codebase** — the kind of system understanding a senior engineer builds up over months on a project. Unlike `shared/`, which is ticket-driven (what went wrong and why), the Core Mental Map is **codebase-driven** (how the system works, independent of any single ticket).
+
+Every agent contributes to it. Every session starts by reading the relevant sections. When an agent discovers something that contradicts the current map, they update the map with the freshest, most accurate information — so the whole team benefits.
+
+#### Purpose
+
+| `shared/*.md` | `core-mental-map/*.md` |
+|---|---|
+| Ticket-driven: what went wrong, root cause, fix | Codebase-driven: how the system works |
+| Verbose: full context, confirmation history | Compressed: key-value facts, ≤ 3 lines per entry |
+| Entries reference specific tickets | Entries reference source files and contributing sessions |
+| Business rules, patterns, regression risks | Architecture, data flows, tech stack, gotchas |
+
+#### File Descriptions
+
+| File | Contains |
+|------|----------|
+| `architecture.md` | System layers, component hierarchy, key class relationships, ownership rules |
+| `business-logic.md` | Core domain invariants, state machine rules, lifecycle constraints |
+| `data-flows.md` | RPC request/response flows, DB write paths, event chains, API contracts |
+| `tech-stack.md` | Technologies, frameworks, library choices, version constraints |
+| `gotchas.md` | Non-obvious couplings, footguns, edge-case traps that surprised agents |
+
+#### Entry Format (compressed)
+
+Each entry in a Core Mental Map file is compact — no prose paragraphs. Facts only.
+
+```markdown
+## CMM-ARCH-001 — GWT Frontend → Backend API boundary
+src: IV-3672 | date: 2026-03-10 | confirmed: 2 | contributors: 3
+fcfrontend/ → (GWT RPC) → fcbackend/api/ → service layer → Oracle/PostgreSQL
+KEY: RPC callbacks async; UI panels need explicit refresh() after response.
+ref: fcfrontend/AlertCentralPanel.java:142, fcbackend/api/AlertService.java:88
+```
+
+Fields:
+- **`src:`** — ticket that first contributed this entry (or "init" if inferred from a fresh code read)
+- **`date:`** — date first written
+- **`confirmed:`** — number of sessions that have verified this fact is still accurate
+- **`contributors:`** — count of distinct agent sessions that have touched this entry
+- **`KEY:`** — the single most important fact (one line, ≤ 120 chars)
+- **`ref:`** — `file:line` anchors (verified against live repo before writing)
+- Optional **`WARN:`** — a caveat or known exception to the rule
+
+#### Core Mental Map INDEX.md Format
+
+```markdown
+# Core Mental Map
+Updated: YYYY-MM-DD | Files: 5 | Total entries: N
+
+| File | Entries | Updated | Summary |
+|------|---------|---------|---------|
+| architecture.md | 3 | 2026-04-18 | System layers, GWT RPC boundary, alert chain |
+| business-logic.md | 2 | 2026-04-18 | Resolve lifecycle, pending flag invariant |
+| data-flows.md | 2 | 2026-04-18 | Case save path, alert resolution chain |
+| tech-stack.md | 2 | 2026-04-18 | GWT 2.x, Java 8, Oracle 12c, PostgreSQL 14 |
+| gotchas.md | 3 | 2026-04-18 | Boolean flag trap, orphaned alert risk |
+```
+
+#### Cross-Check & Update Protocol
+
+At the start of every session (Step 0b) agents **read** the relevant Core Mental Map sections. During the session (Steps 5, 7, 8) agents **verify** that the map's facts match the live codebase. At the end of each session (Step 13g) agents **update** the map:
+
+- **Confirmed fact:** increment `confirmed:` counter — no other change.
+- **Corrected fact:** update `KEY:` and `ref:` with fresh values; append `[CORRECTED {date}]` tag; increment `contributors:`.
+- **New fact:** append a new entry; assign next sequential ID for the file (e.g. `CMM-ARCH-004`).
+- **Obsolete fact:** mark `[DELETED {date}]` but retain the entry — knowledge of why something existed is still valuable.
+
+**Agents emit `[CMM+]` markers** (analogous to `[KB+]`) during their work to flag contributions for Step 13g. Format:
+
+```
+[CMM+ ARCH]  {one-line fact} — ref: {file:line}  [NEW / CONFIRM / CORRECT / DELETE]
+[CMM+ BIZ]   {one-line domain invariant} — ref: {file:line}  [NEW / CONFIRM / CORRECT]
+[CMM+ FLOW]  {one-line data flow description} — ref: {entry point file:line}  [NEW / CONFIRM / CORRECT]
+[CMM+ STACK] {one-line tech fact} — ref: {config or build file:line}  [NEW / CONFIRM / CORRECT]
+[CMM+ GOTCHA]{one-line footgun or non-obvious behaviour} — ref: {file:line}  [NEW / CONFIRM]
+```
+
+**Cross-check rule:** If an agent's live code read contradicts an existing Core Mental Map entry, it **must** emit a `[CMM+ ... CORRECT]` marker and update the entry in Step 13g. Do not leave stale facts in the map.
 
 ---
 
@@ -423,9 +516,10 @@ The KB repo must have a `.gitattributes` file to prevent git conflicts on `share
 
 ```
 # KB repo .gitattributes
-tickets/*.md        merge=union
-shared/*.md         merge=union
-INDEX.md            merge=union
+tickets/*.md              merge=union
+shared/*.md               merge=union
+core-mental-map/*.md      merge=union
+INDEX.md                  merge=union
 ```
 
 `merge=union` tells git to keep lines from **both** sides on conflict (instead of marking `<<<<<<<` conflict markers). For append-only Markdown files this is always correct — all appended entries survive. The full rebuild then de-duplicates and normalises the result.
@@ -455,6 +549,13 @@ INDEX.md            merge=union
      - Write `### Shared Knowledge Entries` table — one row per shared entry
 
 4. Write INDEX.md to KB_WORK_DIR.
+
+5. Rebuild core-mental-map/INDEX.md from scratch:
+   - For each core-mental-map/*.md content file (architecture, business-logic, data-flows,
+     tech-stack, gotchas), count entries ("## CMM-..." headings), read the last Updated
+     date from the most recent entry's `date:` field, and extract a one-line summary.
+   - Rewrite core-mental-map/INDEX.md with fresh counts, dates, and summaries.
+   - Update the Total entries count in the header.
 ```
 
 **This handles every multi-developer scenario automatically:**
@@ -462,6 +563,7 @@ INDEX.md            merge=union
 - Developer manually pushes raw ticket files → other developers' rebuild picks them up
 - Two developers push simultaneously → union merge keeps all rows → rebuild de-duplicates
 - Developer pushes from outside the skill → rebuild on next pull reconciles everything
+- Core Mental Map union-merge: two developers both append new CMM entries → union merge keeps both → rebuild recount gives correct entry totals
 
 ---
 
@@ -509,6 +611,8 @@ Any agent who discovers new business knowledge during their work **must** emit a
 #### Session KB Collection
 
 Step 13a/R9a collect all `[KB+]` markers from the session output (all steps) alongside the structured sources already listed. A `[KB+]` marker is treated as a candidate entry — Morgan confirms it before writing to avoid noise.
+
+Step 13g/R9g collect all `[CMM+]` markers similarly. See the Core Mental Map section above for the full `[CMM+]` marker format and action tags (NEW / CONFIRM / CORRECT / DELETE).
 
 ---
 
@@ -562,7 +666,7 @@ The distributed knowledge base lives in a **dedicated private git repository** (
 **First-time setup (once — when creating the KB repo for the team):**
 ```bash
 KB_CLONE="${PRX_KB_LOCAL_CLONE:-$HOME/.dev-skill/kb}"
-mkdir -p "$KB_CLONE/tickets" "$KB_CLONE/shared"
+mkdir -p "$KB_CLONE/tickets" "$KB_CLONE/shared" "$KB_CLONE/core-mental-map"
 cd "$KB_CLONE"
 git init && git remote add origin "$PRX_KB_REPO"
 echo "# Dev Knowledge Base" > README.md
@@ -756,7 +860,7 @@ else
   # Fresh path — directory empty or does not exist, clone from remote
   git clone "$PRX_KB_REPO" "$KB_CLONE" && \
     echo "KB: cloned ${PRX_KB_REPO} → ${KB_CLONE}."
-  mkdir -p "$KB_CLONE/tickets" "$KB_CLONE/shared"
+  mkdir -p "$KB_CLONE/tickets" "$KB_CLONE/shared" "$KB_CLONE/core-mental-map"
 fi
 ```
 
@@ -925,7 +1029,7 @@ if [ -d "$KB_CLONE/.git" ]; then
 else
   git clone "$PRX_KB_REPO" "$KB_CLONE" && \
     echo "KB: cloned ${PRX_KB_REPO} → ${KB_CLONE}."
-  mkdir -p "$KB_CLONE/tickets" "$KB_CLONE/shared"
+  mkdir -p "$KB_CLONE/tickets" "$KB_CLONE/shared" "$KB_CLONE/core-mental-map"
 fi
 ```
 
@@ -940,7 +1044,7 @@ rm -rf /tmp/dev-skill-kb-[0-9]* 2>/dev/null
 
 # Decrypt to session temp dir
 KB_WORK_DIR="/tmp/dev-skill-kb-$$"
-mkdir -p "$KB_WORK_DIR/tickets" "$KB_WORK_DIR/shared"
+mkdir -p "$KB_WORK_DIR/tickets" "$KB_WORK_DIR/shared" "$KB_WORK_DIR/core-mental-map"
 find "$KNOWLEDGE_DIR" -name "*.md.enc" | while read f; do
   rel="${f#$KNOWLEDGE_DIR/}"
   out="$KB_WORK_DIR/${rel%.enc}"
@@ -1007,6 +1111,22 @@ Updated: {today} | Rooms: 6 | Triggers: 0 | Ticket entries: 0 | Shared entries: 
 
 If any `shared/*.md` file does not exist, create it with a title-only header.
 
+If `core-mental-map/INDEX.md` does not exist, create it:
+```markdown
+# Core Mental Map
+Updated: {today} | Files: 5 | Total entries: 0
+
+| File | Entries | Updated | Summary |
+|------|---------|---------|---------|
+| architecture.md | 0 | {today} | — |
+| business-logic.md | 0 | {today} | — |
+| data-flows.md | 0 | {today} | — |
+| tech-stack.md | 0 | {today} | — |
+| gotchas.md | 0 | {today} | — |
+```
+
+If any `core-mental-map/*.md` content file does not exist, create it with a title-only header (e.g. `# Architecture`). The files will be populated as agents contribute entries during sessions.
+
 **Re-index after pull (distributed mode) or on every init (local mode):**
 
 After a pull, other developers may have pushed ticket or shared files that are not yet referenced in the local INDEX.md. Scan the actual files on disk and reconcile any missing entries — do **not** rebuild from scratch; only add what is absent.
@@ -1068,13 +1188,14 @@ KB: {KNOWLEDGE_DIR}
 **Lightweight KB integrity sweep** — immediately after the status block above, run a quick background pass over `shared/*.md` to flag entries with file:line references that are obviously stale (file no longer exists). Budget: ≤ 5 targeted `ls` or `grep` checks — do not read whole files.
 
 ```bash
-# For each file:line reference found in shared KB files, check the file still exists:
-grep -rh "file:" "$KNOWLEDGE_DIR/shared/" 2>/dev/null | grep -oP '[a-zA-Z/._-]+\.(java|py|js|ts|sql|xml)' | sort -u | while read f; do
+# For each file:line reference found in shared KB and Core Mental Map files, check the file still exists:
+grep -rh "ref:" "$KNOWLEDGE_DIR/shared/" "$KNOWLEDGE_DIR/core-mental-map/" 2>/dev/null \
+  | grep -oP '[a-zA-Z/._-]+\.(java|py|js|ts|sql|xml)' | sort -u | while read f; do
   [ ! -f "$REPO_DIR/$f" ] && echo "STALE_REF: $f"
 done
 ```
 
-Any `STALE_REF` lines are held in memory for the session. These entries will be auto-healed in Step 13c after the session analysis is complete. Do not interrupt Step 0 for this — note `{N} stale file references flagged for auto-heal in Step 13c` and continue.
+Any `STALE_REF` lines are held in memory for the session. These entries will be auto-healed in Step 13c (shared files) and Step 13g (Core Mental Map) after the session analysis is complete. Do not interrupt Step 0 for this — note `{N} stale file references flagged for auto-heal` and continue.
 
 #### 0b. Query (runs after Step 1 — ticket metadata available)
 
@@ -1097,6 +1218,16 @@ grep -i "{TICKET_KEY}" "$KNOWLEDGE_DIR/INDEX.md"
 ```
 
 Read the 5 most recent matching ticket entries and all matching shared entries.
+
+**Layer 3 — Core Mental Map (always runs, regardless of Palace/Master Index hits):**
+
+Read `core-mental-map/INDEX.md` to see available topics and entry counts. Then:
+
+1. For each `core-mental-map/*.md` content file whose summary in `core-mental-map/INDEX.md` is relevant to the current ticket's components or topic, read the full file. (Files are small — compressed format; full reads are acceptable.)
+2. Carry all relevant CMM entries into the Prior Knowledge block under `CORE MENTAL MAP`.
+3. Increment the `confirmed:` counter for each CMM entry read — write the counter update to the file immediately (in-place sed or targeted edit) so other agents see fresh confirmation counts. If the file has not changed since last session, skip the counter update to avoid unnecessary writes.
+
+If `core-mental-map/INDEX.md` does not exist or all files show `0` entries: state `Core Mental Map: empty — will populate in Step 13g.`
 
 **Present the Prior Knowledge block before Step 2:**
 
@@ -1132,6 +1263,14 @@ Read the 5 most recent matching ticket entries and all matching shared entries.
 │ [RISK-001] "resolveCase — four callers watch this"               │
 │           {one-line risk}                                        │
 │                                                                   │
+│ CORE MENTAL MAP                                                   │
+│ ─────────────────────────────────────────────────────────────────│
+│ [CMM-ARCH-001] "GWT Frontend → Backend API boundary"             │
+│   {KEY fact — one line}  ref: {file:line}                        │
+│ [CMM-GOTCHA-001] "Boolean flag trap in CaseManager"              │
+│   {KEY fact — one line}  ref: {file:line}                        │
+│ ⚠️ CMM-ARCH-002 contradicts live code — flagged for Step 13g     │
+│                                                                   │
 │ CONFLUENCE                                                        │
 │ ─────────────────────────────────────────────────────────────────│
 │ [{Page title}] — {URL}                                           │
@@ -1149,11 +1288,15 @@ If no local KB entries and no Confluence results: `Prior knowledge: none found �
 If Confluence is unreachable: omit the CONFLUENCE section and note `Confluence: unavailable.`
 If Bitbucket cross-check skipped: note `Bitbucket: skipped — verify file:line refs in Step 5.`
 
-**Carry the Prior Knowledge block forward — it is mandatory context for:**
-- Step 2: does KB confirm or extend the problem description and acceptance criteria?
-- Step 5: KB may already have the relevant `file:line` — use it before grepping the codebase
-- Step 7: Morgan must explicitly state whether KB history informs the investigation direction
-- Step 8: KB may have a proven fix pattern — build on it rather than starting from scratch
+**The Prior Knowledge block is mandatory, not advisory.** Agents must actively use it:
+
+- **Step 2:** State explicitly whether KB entries confirm, extend, or contradict the ticket's problem description. If a business rule applies, name it.
+- **Step 5:** Check Core Mental Map `ref:` entries before grepping the codebase — known `file:line` anchors must be tried first. If a CMM entry contradicts live code, flag it for Step 13g correction.
+- **Step 7:** Morgan must open the investigation by explicitly stating which KB history items (if any) inform the root cause direction. "KB prior knowledge not applicable" is a valid statement — but silence is not.
+- **Step 8:** If a KB pattern or proven fix exists for this type of problem, build on it. State why you are deviating if you choose a different approach.
+- **Step 13g:** Any `[CMM+]` markers emitted during Steps 5/7/8/9 are written to the Core Mental Map. Every session must produce at minimum one `[CMM+ ... CONFIRM]` for each CMM entry read in Step 0b — confirming facts against live code is how the map stays accurate.
+
+**Compounding rule:** Each session must leave the KB and Core Mental Map in a more accurate or more complete state than it found them. A session that writes nothing — not even a confirmation — breaks the compounding chain.
 
 ---
 
@@ -3047,7 +3190,12 @@ Scan all agent output (Steps 5, 7, 8, 9) for `[KB+]` markers. Each marker is a c
 
 Morgan de-duplicates across both sources — if a `[KB+]` marker and a structured extract describe the same thing, write one entry, not two.
 
-If no new knowledge was found beyond what is already in the KB (e.g. this ticket was very simple with no novel insights), state: "No new knowledge to record — existing KB entries remain current." and skip to the closing message.
+If no new knowledge was found beyond what is already in the KB (e.g. this ticket was very simple with no novel insights), do not skip Step 13 entirely. Instead:
+1. Write the ticket entry (13b) — every ticket is worth recording.
+2. For each CMM entry that was read during Step 0b and verified as still accurate during the session, emit `[CMM+ ... CONFIRM]` and increment its `confirmed:` counter (Step 13g). Confirmations are a first-class contribution — they signal to future agents that this fact has been independently verified multiple times.
+3. State: "No new discoveries — confirming {N} Core Mental Map entries verified against live code."
+
+**A session that writes nothing to the KB — not even a confirmation — is a missed compounding opportunity.** The only exception is if the KB was inaccessible (KB_ERROR in Step 0a).
 
 #### 13b. Write the Ticket Entry
 
@@ -3113,6 +3261,7 @@ For every new or updated knowledge entry produced in 13b–13c:
    Risks         : {N new / N updated}
    INDEX.md (Palace): {N triggers added to rooms: {room names}}
    INDEX.md      : {N rows added}
+   Mental Map    : {N new / N confirmed / N corrected} (see Step 13g)
    Git           : local mode — no distribution
 ```
 
@@ -3146,6 +3295,7 @@ On success display (encryption enabled):
    Risks         : {N new / N updated}
    INDEX.md (Palace): {N triggers added to rooms: {room names}}
    INDEX.md      : {N rows added / N re-indexed from disk}
+   Mental Map    : {N new / N confirmed / N corrected} (see Step 13g)
    Encrypted     : {N} .md.enc files written
    Git           : pushed to origin/main ({short hash}) {or "branch created" on first push}
    Session temp  : {KB_WORK_DIR} deleted
@@ -3163,10 +3313,53 @@ On success display (no encryption):
    Risks         : {N new / N updated}
    INDEX.md (Palace): {N triggers added to rooms: {room names}}
    INDEX.md      : {N rows added / N re-indexed from disk}
+   Mental Map    : {N new / N confirmed / N corrected} (see Step 13g)
    Git           : pushed to origin/main ({short hash}) {or "branch created" on first push}
 ```
 
 If push fails: replace the `Git` line with `Git: KB_PUSH_WARN — committed locally. Run: cd {KNOWLEDGE_DIR} && git push origin main`. If encryption was enabled, still delete `KB_WORK_DIR`.
+
+#### 13g. Update Core Mental Map
+
+Collect all `[CMM+]` markers emitted during the session (Steps 5, 7, 8, 9) and apply them to the `core-mental-map/` files. Morgan reviews the list and confirms which are genuinely new or corrective (not already reflected in the CMM entries read during Step 0b).
+
+**For each `[CMM+]` marker:**
+
+| Action tag | What to do |
+|------------|-----------|
+| `NEW` | Assign the next sequential ID for the file (e.g. `CMM-ARCH-004`). Append the compressed entry. Update `core-mental-map/INDEX.md` row (increment entry count, update summary, set Updated date). |
+| `CONFIRM` | Increment `confirmed:` counter on the matching entry. Update `Updated:` date in the INDEX.md row. |
+| `CORRECT` | Update `KEY:` and/or `ref:` fields with the fresh values from the live code read. Append `[CORRECTED {today}]` tag on its own line. Increment `contributors:`. Update INDEX.md row. |
+| `DELETE` | Append `[DELETED {today}]` tag. Retain the entry body — historical knowledge of why something existed is still valuable. Update INDEX.md summary to note the deletion. |
+
+**Stale ref auto-heal for Core Mental Map:** Apply the same auto-heal logic as Step 13c for any `ref:` lines in `core-mental-map/*.md` files where the file no longer exists at that path. Use the STALE_REF list collected in Step 0a.
+
+**Cross-check bonus:** If during Steps 5–9 an agent explicitly verified a CMM entry against live code and found it still accurate, emit `[CMM+ ... CONFIRM]` and increment `confirmed:`. This cross-verification is the map's quality signal — a high `confirmed:` count means the fact has been independently verified by multiple sessions.
+
+**After writing all CMM updates:**
+
+```bash
+# Update core-mental-map/INDEX.md — recount entries per file
+for f in "$KB_WORK_DIR/core-mental-map/"*.md; do
+  [ "$(basename $f)" = "INDEX.md" ] && continue
+  count=$(grep -c "^## CMM-" "$f" 2>/dev/null || echo 0)
+  fname=$(basename "$f")
+  # Update the count and date in INDEX.md row for this file
+  echo "CMM_REINDEX: $fname — $count entries"
+done
+# Update the Total entries count and Updated date in core-mental-map/INDEX.md header
+```
+
+Display:
+```
+🧠 Core Mental Map Updated
+   Location     : {KNOWLEDGE_DIR}/core-mental-map/
+   New entries  : {N} (CMM-{type}-NNN)
+   Confirmed    : {N} entries verified against live code
+   Corrected    : {N} entries updated with fresh info
+   Deleted      : {N} entries marked obsolete
+   Total entries: {N} across {M} files
+```
 
 Then close with the ready-to-code message from Step 12.
 
@@ -3982,7 +4175,13 @@ Same as Step 13e — add/update the ticket row in `### Ticket Entries`, add new 
 
 #### R9f. Publish KB
 
-**If `KB_MODE=local`:** Skip all git and encryption steps. Files are already written to `KNOWLEDGE_DIR` in steps R9b–R9e. Display:
+#### R9g. Update Core Mental Map
+
+Apply the same process as Step 13g in Dev Mode. Scan all `[CMM+]` markers emitted during Steps R4 and R5 (reviewers may discover architecture facts, gotchas, or stale CMM entries while reading the code diff). Apply NEW / CONFIRM / CORRECT / DELETE actions and update `core-mental-map/INDEX.md` counts.
+
+PR Review sessions are especially well-suited to confirming (or correcting) existing CMM entries because reviewers read the actual code changes — they can verify whether a CMM fact is still accurate in the patched version.
+
+**If `KB_MODE=local`:** Skip all git and encryption steps. Files are already written to `KNOWLEDGE_DIR` in steps R9b–R9g. Display:
 ```
 📚 Knowledge Base Updated (local)
    Location      : {KNOWLEDGE_DIR}/
@@ -3994,6 +4193,7 @@ Same as Step 13e — add/update the ticket row in `### Ticket Entries`, add new 
    Architecture      : {N new / N updated}
    Palace            : {N triggers added to rooms: {room names}}
    INDEX.md          : {N rows added}
+   Mental Map        : {N new / N confirmed / N corrected} (see Step R9g)
    Git               : local mode — no distribution
 ```
 
@@ -4026,6 +4226,7 @@ On success display (encryption enabled):
    Architecture      : {N new / N updated}
    Palace            : {N triggers added to rooms: {room names}}
    INDEX.md          : {N rows added / N re-indexed from disk}
+   Mental Map        : {N new / N confirmed / N corrected} (see Step R9g)
    Encrypted     : {N} .md.enc files written
    Git           : pushed to origin/main ({short hash}) {or "branch created" on first push}
    Session temp  : {KB_WORK_DIR} deleted
@@ -4044,6 +4245,7 @@ On success display (no encryption):
    Architecture      : {N new / N updated}
    Palace            : {N triggers added to rooms: {room names}}
    INDEX.md          : {N rows added / N re-indexed from disk}
+   Mental Map        : {N new / N confirmed / N corrected} (see Step R9g)
    Git           : pushed to origin/main ({short hash}) {or "branch created" on first push}
 ```
 

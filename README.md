@@ -284,20 +284,40 @@ Never commit `PRX_KB_KEY`. Share it with teammates through a secure channel (1Pa
 
 ```
 team-kb/
-├── INDEX.md              # Combined Memory Palace + Master Index
+├── INDEX.md                        # Combined Memory Palace + Master Index
 ├── tickets/
-│   ├── PROJ-1234.md      # Per-ticket session record
+│   ├── PROJ-1234.md                # Per-ticket session record
 │   └── PROJ-1235.md
-└── shared/
-    ├── business-rules.md
-    ├── architecture.md
-    ├── patterns.md
-    └── regression-risks.md
+├── shared/                         # Accumulated team knowledge (ticket-driven)
+│   ├── business-rules.md           # Domain invariants discovered across all tickets
+│   ├── architecture.md             # Class hierarchies, data flows, ownership decisions
+│   ├── patterns.md                 # Recurring bug/fix patterns with frequency counters
+│   └── regression-risks.md         # Known fragile areas requiring care on every change
+└── core-mental-map/                # Compressed, always-growing codebase model (codebase-driven)
+    ├── INDEX.md                    # Quick index: topics, entry counts, last-updated
+    ├── architecture.md             # System layers, component boundaries, key class relationships
+    ├── business-logic.md           # Core domain invariants and state machine rules
+    ├── data-flows.md               # Key data flows, RPC contracts, write paths
+    ├── tech-stack.md               # Technologies, frameworks, key library choices
+    └── gotchas.md                  # Non-obvious couplings, footguns, edge-case traps
 ```
+
+In `KB_MODE=distributed` all files on disk are `.md.enc`; the plain `.md` files exist only in a temp working directory during the session.
 
 `INDEX.md` holds two sections:
 - **Memory Palace** — vivid trigger phrases mapped to system rooms; primary retrieval (≤ 3 reads regardless of KB size)
 - **Master Index** — flat table greppable by ticket key, component, label, and trigger; fallback if Palace has no match
+
+#### shared/ vs core-mental-map/
+
+| `shared/*.md` | `core-mental-map/*.md` |
+|---|---|
+| Ticket-driven: what went wrong, root cause, fix | Codebase-driven: how the system works |
+| Verbose: full context, confirmation history | Compressed: key-value facts, ≤ 3 lines per entry |
+| References specific tickets | References source files and contributing sessions |
+| Business rules, patterns, regression risks | Architecture, data flows, tech stack, gotchas |
+
+Every session starts by reading relevant `core-mental-map/` sections. Agents emit `[CMM+]` markers when they discover new or corrective codebase facts; these are applied to the map at the end of every session (Step 13g / Step R10 in PR Review Mode). The map grows more accurate with each ticket worked.
 
 ### Multi-developer usage
 

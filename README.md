@@ -468,12 +468,16 @@ tail -20 scripts/poll-jira.log
 │   ├── com.dev-skill.poll-jira.plist  # macOS launchd schedule template
 │   ├── .jira-credentials.example # Credentials template
 │   └── send-report.py            # Email delivery helper
+├── .claude/
+│   └── settings.local.json       # Per-machine Claude Code permissions and hooks (not committed)
 ├── .mcp.json.example             # MCP server config template
 ├── .env.example                  # Environment variable template
 └── README.md
 ```
 
 All skill logic lives in `plugin/skills/dev/SKILL.md`. No compiled code, no runtime dependencies beyond what Claude Code provides.
+
+> **Note:** `.claude/settings.local.json` stores per-machine permissions and the `SessionStart` hook that loads `.env`. Any `Bash` permission entries referencing `SKILL.md` should use the relative path `plugin/skills/dev/SKILL.md` — not an absolute path — so the config works on any machine.
 
 ---
 
@@ -551,6 +555,7 @@ claude plugin list
 - **Resilience:** MCP retry-with-backoff (3 attempts, 30 s apart) before failing; PDF tool pre-check at session start with graceful fallback.
 - **KB stale detection:** Opportunistic validation during file reads; auto-heal writes `RELOCATED`/`DELETED` tags in Step 13c rather than silently leaving broken references.
 - **Lessons Learned:** New `lessons-learned/` KB folder — per-developer files for recording pitfalls and sprint retrospective insights. Agents read all files at session start and surface matching entries in the Prior Knowledge block; `[LL+]` markers let agents flag new lessons during investigation (Step 13h / R9h). Works in both local and distributed mode.
+- **Settings fix:** Removed hardcoded absolute path to `SKILL.md` from `.claude/settings.local.json`; replaced with the relative path `plugin/skills/dev/SKILL.md` so the config works on any machine.
 - **Bryan — Scrum Master:** New team member who observes every session silently and runs a post-session retrospective (Step 14 / R10). Audits token spend against configurable per-ticket-type budgets (`PRX_BUDGET_BUG`, `PRX_BUDGET_ENHANCEMENT`), identifies process friction, and proposes one focused SKILL.md improvement per session. Requires unanimous consensus from Morgan, Riley, and one engineer before applying. Pushes changes to the plugin repo's main branch after `PRX_SKILL_UPGRADE_MIN_SESSIONS` sessions (default: 3). Maintains a running efficiency log in `shared/process-efficiency.md`.
 
 ### v1.2.0

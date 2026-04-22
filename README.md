@@ -631,6 +631,7 @@ claude plugin list
 - **Step 14 / R10 / E8 (Bryan) — actual monthly spend:** Bryan now runs `npx ccusage@latest monthly --json` to get the authoritative monthly figure instead of summing cost fields from `process-efficiency.md` session records. Falls back to the manual sum if ccusage is unavailable.
 - **Developer confirmation gate:** Before Bryan applies any approved SKILL.md change (Step 14c) or compaction pass (Step 14d), an interactive confirmation box shows the exact before/after wording, problem solved, process impact, and estimated token saving. The developer must explicitly confirm before any file is modified. Skipped automatically in `AUTO_MODE=Y`.
 - **Permissions:** `Bash(npx --yes ccusage@latest *)` added to `.claude/settings.local.json` allowlist so the budget check runs without prompts.
+- **Setup scripts:** `scripts/setup.sh` (macOS / Linux / WSL / Git Bash) and `scripts/setup.ps1` (Windows PowerShell) auto-detect the OS and install all prerequisites in one pass — `uvx`, Node.js, pandoc, `.env` copy, and `~/.claude/settings.json` marketplace registration. `scripts/setup.cmd` provides a double-click launcher for Windows CMD users. Installation cascades through available package managers (Homebrew → nvm on macOS; apt → dnf → nvm on Linux; winget → Chocolatey → Scoop on Windows) with graceful fallback and platform-specific manual instructions on failure.
 
 ### v1.2.1
 

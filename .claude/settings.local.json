@@ -10,7 +10,11 @@
       "WebFetch(domain:github.com)",
       "Bash(chmod +x *)",
       "Bash(npx --yes ccusage@latest *)",
-      "WebFetch(domain:asana.com)"
+      "WebFetch(domain:asana.com)",
+      "mcp__plugin_claude-mem_mem-search__get_observation",
+      "Bash(awk '/^### Step R9/,/^### Step R10/' plugin/skills/dev/SKILL.md)",
+      "Bash(awk '/^### Step 13/,/^### Step 14/' plugin/skills/dev/SKILL.md)",
+      "Bash(git add *)"
     ]
   },
   "hooks": {

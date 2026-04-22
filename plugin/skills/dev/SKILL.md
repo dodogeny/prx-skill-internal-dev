@@ -563,12 +563,12 @@ complementary paths explicitly before submitting the fix.
 
 ### Retrieval Rules
 
-1. **Palace first** — read `INDEX.md`, navigate to `## Memory Palace`, find the room(s) for the ticket's components/labels, scan triggers. This is always ≤ 3 read operations regardless of KB size.
-2. **Master Index as fallback** — if Palace yields no matches, grep the `## Master Index` section of `INDEX.md` by component, label, and ticket key.
-3. **Read only matched files** — never read a full shared file; grep for the section anchor, then read ±40 lines.
-4. **Max 5 ticket entries** — if more than 5 ticket entries match, take the 5 most recent by date.
-5. **All matching shared entries** — business rules, patterns, risks matching the query are always included.
-6. **Never block on empty KB** — absence of prior knowledge is not an error; initialise and proceed.
+Follow the Memory Palace retrieval procedure in the **"How Agents Use the Palace"** section above (Palace triggers → Master Index fallback, ≤ 3 read operations). Additionally:
+
+- **Read only matched files** — never read a full shared file; grep for the section anchor, then read ±40 lines.
+- **Max 5 ticket entries** — if more than 5 ticket entries match, take the 5 most recent by date.
+- **All matching shared entries** — business rules, patterns, risks matching the query are always included.
+- **Never block on empty KB** — absence of prior knowledge is not an error; initialise and proceed.
 
 ### Re-Index Rules
 
@@ -1394,11 +1394,7 @@ Once Step 1 has returned the ticket's **components** and **labels**, query in tw
 
 **Layer 1 — Memory Palace (primary, fast path):**
 
-1. Read `INDEX.md`, navigate to the `## Memory Palace` section.
-2. Using the Room Directory table, identify which room(s) match the ticket's components and labels.
-3. For each matched room, scan its trigger table (≤ 10 lines per room).
-4. Any trigger that is semantically relevant to this ticket's topic is a **hit** — note its `KB Entry` and `File`.
-5. Read the full entry for each hit (grep for the section anchor in the linked file, read ±40 lines).
+Execute the Memory Palace retrieval procedure (see **"How Agents Use the Palace"** in the KB Architecture section): map ticket components/labels to rooms → scan triggers → read matched entries. Always ≤ 3 read operations.
 
 **Layer 2 — Master Index fallback (if Palace yields no matches):**
 
@@ -1880,12 +1876,8 @@ State clearly what **should** happen if the system were working correctly.
 State clearly what **actually** happens — the symptom the reporter sees.
 
 #### 6e. Replication Confidence
-Rate how confidently this replication guide reflects the issue:
-- **High** — reproduction steps are fully derived from ticket + code analysis → proceed automatically
-- **Medium** — some assumptions made; note the assumption, proceed, and flag it clearly
-- **Low** — limited information in ticket → **stop and ask the developer** to clarify before continuing to Step 7
 
-If confidence is Medium or Low, list the specific unknowns or assumptions made.
+Same three-level gate as Step 5 (High → proceed; Medium → note assumption and proceed; Low → stop and ask developer before continuing to Step 7). State: `Replication confidence: {level} — {reason}.` If Medium or Low, list the specific unknowns or assumptions.
 
 #### 6f. Service Restart Guidance
 
@@ -1962,17 +1954,9 @@ State: `Decision tree path: {BUG → DATA ISSUE → Missing null check}` (or whi
 
 Read the files identified in Step 5 and produce a direct analysis. No panel. No debate.
 
-**7-ENH-a. What needs to be added**
-- Explain what the feature is and why it currently does not exist
-- State clearly: *"The system currently lacks X. We need to add Y at Z."*
-- Reference specific file paths and line numbers where the addition will land
+**7-ENH-a. What needs to be added + insertion points**
 
-**7-ENH-b. Insertion point analysis**
-- Identify every file, method, and layer that must be touched
-- For each insertion point, state:
-  - What already exists there and why it is the correct anchor
-  - What new code goes in (field, method, config item, UI hook — be specific)
-- Run the class hierarchy check (same as Step 5 mandatory check): confirm new fields or methods belong in the abstract base, not the concrete subclass, where applicable
+State: *"The system currently lacks X. We need to add Y at Z."* with specific `file:line` references. For each insertion point: name what already exists there, what new code goes in (field, method, config item, UI hook), and whether new fields/methods belong in the abstract base — apply the Step 5 class hierarchy rule.
 
 **7-ENH-c. Git history check**
 - Run `git log --oneline --all -- {primary_file}` for each affected file
@@ -2575,9 +2559,9 @@ Before applying anything, Morgan vetted the proposed fix against the adopted roo
 2. **Surgical scope** — is the fix minimal? Does it avoid touching code unrelated to the root cause?
 3. **Regression risk** — does the fix introduce any new null risks, flag side effects, or break the complementary code path?
 4. **Team note honoured** — if a nuance was flagged in Step 7i, is it handled?
-5. **DB safety** — if a schema change is included, is it safe on both Oracle and PostgreSQL?
-6. **Abstract class ownership** — if the fix adds new fields, getters/setters, or utility methods to a concrete class: confirm whether the abstract base class is the correct owner. Run `grep "extends {AbstractBase}" --include="*.java"` to find all subclasses. If the abstract base already owns similar state for sibling classes, move the new infrastructure there. Only `getConfig()` config item registrations and `setAttribute()` switch cases are concrete-class concerns — everything else belongs in the abstract base when a suitable one exists.
-7. **Tester concerns addressed** — review Riley's Testing Impact Assessment (Step 7e) and Tester note (Step 7i). For each High or Medium concern Riley raised: confirm the proposed fix addresses it, or explicitly state it is accepted risk and why. If Riley's open question was not answered during cross-examination, answer it now before approving.
+5. **DB safety** *(skip if no schema change included)* — is the change safe on both Oracle and PostgreSQL?
+6. **Abstract class ownership** *(skip if no new fields, methods, or getters/setters added to a concrete class)* — confirm whether the abstract base is the correct owner. Run `grep "extends {AbstractBase}" --include="*.java"` to list siblings. Only `getConfig()` registrations and `setAttribute()` switch cases are concrete-class concerns; everything else belongs in the abstract base when a suitable one exists.
+7. **Tester concerns** *(skip if Riley raised no High or Medium concerns in Step 7e)* — for each High/Medium concern, confirm the fix addresses it or state accepted risk and why.
 
 ```
 ─── Morgan's Fix Review ───────────────────────────────────────────
@@ -2881,7 +2865,7 @@ State the detected method before proceeding. If `html-fallback`, warn the develo
 
 #### 12b. Generate Markdown Source
 
-Write a temporary Markdown file at `/tmp/{TICKET_KEY}-analysis.md`. Populate every section below verbatim from the output already produced in each step — **do not summarise, abbreviate, truncate, or omit anything**. Every table, code block, hypothesis box, statement block, verdict, PR diff analysis, attachment finding, and linked ticket detail produced earlier must appear in full. The PDF is the complete record of the session — if it was produced during analysis, it must be in the report. Use the placeholders as structural guides; replace each with the actual content from that step.
+Write `/tmp/{TICKET_KEY}-analysis.md`. Reproduce every step's full output — no summaries, truncation, or omissions. Placeholders below are structural guides; replace each with the actual step content.
 
 ````
 # {TICKET_KEY} — {Ticket Summary}
@@ -2948,18 +2932,8 @@ If linked tickets exist but provide no new context: "No additional context from 
 
 ### Associated PRs (from Linked Tickets)
 
-{For each PR discovered across the primary ticket and all linked tickets:
-
-  PR #N — "[title]" (status: open / merged / declined)
-  Branch : {source} → {target}
-  Merged : {date, or "Not merged"}
-  Relevance: {one-sentence relevance to this ticket}
-
-  **Code Changes:**
-  {Full diff analysis — files changed, what was modified, why (from PR description and commit messages),
-  and whether the change is directly related to this ticket's problem or fix.}
-
-If no PRs were found on any ticket: "No associated PRs found."}
+{Each associated PR: title, status, branch, merge date, one-sentence relevance, code change summary (files, what/why from PR description).
+If none: "No associated PRs found."}
 
 ### Attachment Analysis
 
@@ -2982,16 +2956,8 @@ If no comments: "No comments on ticket — proceeding from description only."}
 
 ### Prior Investigation Summary
 
-{If prior investigation was found in comments, reproduce the full Prior Investigation Summary block:
-
-  Prior Investigation Summary:
-  - Root cause identified: {what was found}
-  - Files already identified: {list}
-  - Attempted fixes: {what was tried and outcome}
-  - Confirmed working / not working: {what was already validated}
-  - Remaining unknowns: {what is still unresolved}
-
-If no prior investigation: "No prior investigation found in comments."}
+{Prior Investigation Summary block from Step 3 (root cause, files, attempts, confirmed/unconfirmed, unknowns).
+If none: "No prior investigation found in comments."}
 
 ---
 
@@ -3068,49 +3034,37 @@ If not applicable: "Class hierarchy check not required — no new fields or meth
 
 ### 7b. Morgan's Lead Briefing
 
-{Reproduce the full Morgan briefing box verbatim — ticket, classification, primary suspect area, team assignments for Alex / Sam / Jordan / Riley, schedule}
+{Morgan lead briefing from Step 7b}
 
 ### 7c. Investigation — Mid-Point Check-In (T+2)
 
-{Reproduce the full mid-point check-in block verbatim — Alex, Sam, Jordan, Riley status reports and Morgan's response}
+{Mid-point check-in from Step 7c (Alex, Sam, Jordan, Riley statuses + Morgan's response)}
 
 ### 7d. Hypothesis Submission (T+4)
 
-{Reproduce each hypothesis box verbatim:
-  - Alex — History & Regression Hypothesis
-  - Sam — Data Flow & Logic Hypothesis
-  - Jordan — Defensive Patterns Hypothesis
-  - Riley — Testing Impact Assessment}
+{All 4 hypothesis boxes from Step 7d (Alex, Sam, Jordan, Riley)}
 
 ### 7e. Riley's Question + Morgan's Cross-Examination (T+5)
 
-{Reproduce the full cross-examination block verbatim:
-  - Riley's question and engineer's response
-  - Morgan's questions and all engineer responses}
+{Cross-examination from Step 7e (Riley's question + engineer response; Morgan's questions + all responses)}
 
 ### 7f. Team Debate
 
-{Reproduce the full debate round verbatim — each challenge, response, and Morgan's close.
-If no challenges: "No challenges — team and tester accept each other's findings."}
+{Team debate from Step 7f (each challenge, response, Morgan's close). If no challenges: state so.}
 
 ### 7g. Morgan's Verdict (T+6)
 
-{Reproduce the full verdict block verbatim:
-  - Score table (Alex / Sam / Jordan — N/15 pts)
-  - Tester's view paragraph
-  - Morgan's personal assessment
-  - Adopted root cause
-  - Verdict outcome box (🏆 / 🤝 / ⚡)}
+{Morgan's verdict from Step 7g (score table, tester's view, personal assessment, adopted root cause, outcome box)}
 
 ### 7h. Root Cause Statement
 
-{Reproduce the full Root Cause Statement block verbatim — Author, Approved by, Location, Mechanism, Trigger, Fix direction, Confidence, Team note, Tester note}
+{Root Cause Statement from Step 7h (all fields)}
 
 {--- FOR ENHANCEMENT TICKETS: reproduce the Enhancement Direct Analysis ---}
 
 ### Enhancement Statement
 
-{Reproduce the full Enhancement Statement block verbatim — What is missing, Insertion points, Approach, Class hierarchy, Partial exists, Confidence}
+{Enhancement Statement from Step 7-ENH (all fields)}
 
 ---
 
@@ -3132,9 +3086,7 @@ If no challenges: "No challenges — team and tester accept each other's finding
 
 ### 8c. Morgan's Fix Review
 
-{Reproduce the full Fix Review block verbatim — all 7 checks and Morgan's verdict:
-  Mechanism alignment, Surgical scope, Regression risk, Team note honoured,
-  DB safety, Abstract class ownership, Tester concerns, Morgan's verdict (✅ / ⚠️ / 🔄)}
+{Morgan's Fix Review from Step 8c (all 7 checks + verdict)}
 
 ### 8d. DB Migration Scripts
 
@@ -3785,19 +3737,9 @@ date: {today} | developer: {DEVELOPER} | ticket: {TICKET_KEY} | type: {Bug/Enh} 
 hotspot: {Step name} ({N}%) | change: {BL-NNN or "—"} | impact: {saving vs prev session or "baseline"}
 ```
 
-**2. New or updated backlog item:**
-- If a **new** issue was observed: append a new `## [BL-NNN] Backlog Item` block
-- If an **existing** item recurred: append `[SEEN+1: {today} by {developer}]` under that item's block (do not edit the original line)
-- If an item was **promoted**: append `[PROMOTED HIGH: {today} — seen {N}×]`
-- If a change was **applied**: append `[APPLIED: {today} in v{X.Y.Z}]`
-- If consensus was **rejected**: append `[CONSENSUS ❌: {today} — re-queued]`
+**2. Backlog and blocker updates** — use the `[BL-NNN] Backlog Item` and `[BK-NNN] Blocker` journal entry formats defined in the **Knowledge Base** section. Key rules: new → append new block; recurrence → append `[SEEN+1]`/`[COUNT+1]`; promotion → append `[PROMOTED HIGH]`; applied → append `[APPLIED]`; resolved → append `[RESOLVED]`. Never edit existing lines.
 
-**3. New or updated blocker:**
-- If a **new** blocker was observed: append a new `## [BK-NNN] Blocker` block
-- If an existing blocker **recurred**: append `[COUNT+1: {today} by {developer}]`
-- If a blocker was **resolved**: append `[RESOLVED: {today}]`
-
-The auto-generated header and Velocity Dashboard are then rebuilt from the journal during the next pull (Step 0a), not written here — writing them here would cause merge conflicts.
+The auto-generated header and Velocity Dashboard are rebuilt from the journal during the next pull (Step 0a) — not written here.
 
 #### 14f. Skill Audit Trail
 
@@ -3883,18 +3825,9 @@ Display the same field summary as Step 1.
 
 Execute the full Step 2 from Dev Mode without omission: problem statement, **linked & associated ticket analysis**, attachment analysis, and optional issue diagram.
 
-**Linked tickets are mandatory for review context.** Fetch all issue links (blocked by, blocks, relates to, cloned from, duplicates, is caused by, parent/child epics, sub-tasks). For each linked ticket:
-1. Retrieve the full ticket details (summary, description, status, type, resolution, attachments).
-2. Extract any context relevant to reviewing the code changes:
-   - Prior investigations, root cause findings, or fix details from related bugs
-   - Acceptance criteria or scope changes that affect what the code should do
-   - Design decisions or constraints from parent epics or stories
-   - Known workarounds, regression history, or related failures from "relates to" tickets
-3. Summarise each linked ticket: `[KEY] (type, status) — one-sentence relevance to the code review`
+**Linked tickets are mandatory for review context.** Apply the full **Linked & Associated Tickets** procedure from Step 2 (two-phase lazy fetch; High-relevance tickets get full fetch + PR analysis; Low-relevance get summary only). One review-specific difference: step 3 per linked ticket reads `[KEY] (type, status) — one-sentence relevance to the **code review**` rather than to the ticket generally.
 
-Carry all linked ticket findings forward into Step R5 so reviewers have the full acceptance context — not just what the primary ticket says, but everything that shaped the expected behaviour.
-
-This establishes the acceptance criteria and intended behaviour that the code changes will be reviewed against.
+Carry all findings forward into Step R5 — reviewers need the full acceptance context to judge correctness.
 
 ---
 
@@ -4398,7 +4331,7 @@ mkdir -p "$REPORT_DIR"
 
 #### R8b. Generate Markdown Source
 
-Write a temporary Markdown file at `/tmp/{TICKET_KEY}-review.md`. Populate every section below verbatim from the output already produced — do not summarise or abbreviate.
+Write `/tmp/{TICKET_KEY}-review.md`. Reproduce every step's full output — no summaries or omissions. Placeholders below are structural guides.
 
 ````
 # {TICKET_KEY} — PR Review Report
@@ -4505,15 +4438,11 @@ Write a temporary Markdown file at `/tmp/{TICKET_KEY}-review.md`. Populate every
 
 ### R5b. Mid-Point Check-In (T+2)
 
-{Reproduce the full mid-point check-in block verbatim — Alex, Sam, Jordan, Riley statuses and Morgan's response}
+{Mid-point check-in from Step R5b (Alex, Sam, Jordan, Riley statuses + Morgan's response)}
 
 ### R5c. Final Review Submissions (T+4)
 
-{Reproduce each submission block verbatim:
-  - Alex — Code Quality Findings
-  - Sam — Logic Correctness Findings
-  - Jordan — Defensive Pattern Findings
-  - Riley — Test Coverage Assessment}
+{All 4 final review submissions from Step R5c (Alex, Sam, Jordan, Riley)}
 
 ### R5d. Riley's Question + Morgan's Cross-Examination (T+5)
 
@@ -4525,15 +4454,13 @@ Write a temporary Markdown file at `/tmp/{TICKET_KEY}-review.md`. Populate every
 
 ### R5f. Morgan's Review Verdict (T+6)
 
-{Reproduce the full verdict block verbatim — scores, coverage view, Morgan's assessment, overall verdict, Best Review box}
+{Morgan's Review Verdict from Step R5f (scores, coverage view, assessment, overall verdict, Best Review box)}
 
 ---
 
 ## Step R6 — Consolidated Review Report
 
-{Reproduce the full REVIEW FINDINGS block verbatim — all sections:
-  Critical Issues, Major Issues, Minor Issues, Positives,
-  Test Coverage Summary, Conditions for Approval}
+{Full REVIEW FINDINGS block from Step R6 (Critical Issues, Major Issues, Minor Issues, Positives, Test Coverage Summary, Conditions for Approval)}
 
 ---
 
@@ -4596,14 +4523,7 @@ Scan the **full review session output** (all steps) and extract knowledge from t
 
 **Source 1 — `[KB+]` inline annotations** (primary source):
 
-Scan all reviewer output (Steps R4, R5) for `[KB+]` markers emitted during the review. Each marker is a candidate entry. Morgan confirms which are genuinely new before writing.
-
-| Marker | Writes to |
-|--------|-----------|
-| `[KB+ BIZ]` | `shared/business-rules.md` (confirmed or violated) |
-| `[KB+ ARCH]` | `shared/architecture.md` |
-| `[KB+ PAT] ... [NEW/BUMP]` | `shared/patterns.md` |
-| `[KB+ RISK]` | `shared/regression-risks.md` |
+Scan all reviewer output (Steps R4, R5) for `[KB+]` markers emitted during the review. Same markers and target files as Step 13a. Morgan confirms which are genuinely new before writing. Note: `[KB+ BIZ]` in Review Mode may capture both confirmations and violations of business rules.
 
 **Source 2 — Structured review extracts** (fallback — anything not already annotated):
 
@@ -4654,17 +4574,9 @@ Same as Step 13e — add/update the ticket row in `### Ticket Entries`, add new 
 
 #### R9f. Publish KB
 
-#### R9g. Update Core Mental Map
+Follow the same publish procedure as Step 13f (encrypt if `PRX_KB_KEY` is set → git push → delete temp dir; same failure handling). Use the review-specific display formats below instead of the Dev Mode formats.
 
-Apply the same process as Step 13g in Dev Mode. Scan all `[CMM+]` markers emitted during Steps R4 and R5 (reviewers may discover architecture facts, gotchas, or stale CMM entries while reading the code diff). Apply NEW / CONFIRM / CORRECT / DELETE actions and update `core-mental-map/INDEX.md` counts.
-
-PR Review sessions are especially well-suited to confirming (or correcting) existing CMM entries because reviewers read the actual code changes — they can verify whether a CMM fact is still accurate in the patched version.
-
-#### R9h. Save Lessons Learned
-
-Apply the same process as Step 13h in Dev Mode. Collect `[LL+]` markers emitted during Steps R4 and R5, and append them to `lessons-learned/{developer}.md`.
-
-**If `KB_MODE=local`:** Skip all git and encryption steps. Files are already written to `KNOWLEDGE_DIR` in steps R9b–R9g. Display:
+**If `KB_MODE=local`:**
 ```
 📚 Knowledge Base Updated (local)
    Location      : {KNOWLEDGE_DIR}/
@@ -4681,23 +4593,7 @@ Apply the same process as Step 13h in Dev Mode. Collect `[LL+]` markers emitted 
    Git               : local mode — no distribution
 ```
 
-**If `KB_MODE=distributed`:**
-
-**Step 1 — If encryption is enabled (`PRX_KB_KEY` is set): batch encrypt session files:**
-
-Use the batch encrypt command from the **Encryption Scheme** section above. If encryption is not enabled, files were written directly to `KNOWLEDGE_DIR` in steps R9b–R9e — skip this step.
-
-**Step 2 — Push to the private KB repository (with remote existence check):**
-
-Execute the git push sequence from the **Git Sync Rules** section above. The push step verifies remote reachability and auto-creates `origin/main` on first push using `--set-upstream`.
-
-**Step 3 — If encryption is enabled: delete the session temp directory:**
-```bash
-rm -rf "$KB_WORK_DIR"
-echo "KB: session temp dir ${KB_WORK_DIR} deleted."
-```
-
-On success display (encryption enabled):
+**If `KB_MODE=distributed`, on success (encryption enabled):**
 ```
 📚 Knowledge Base Updated & Pushed (encrypted)
    Repository    : {PRX_KB_REPO}
@@ -4716,7 +4612,7 @@ On success display (encryption enabled):
    Session temp  : {KB_WORK_DIR} deleted
 ```
 
-On success display (no encryption):
+**If `KB_MODE=distributed`, on success (no encryption):**
 ```
 📚 Knowledge Base Updated & Pushed
    Repository    : {PRX_KB_REPO}
@@ -4733,7 +4629,15 @@ On success display (no encryption):
    Git           : pushed to origin/main ({short hash}) {or "branch created" on first push}
 ```
 
-If push fails: replace the `Git` line with `Git: KB_PUSH_WARN — committed locally. Run: cd {KNOWLEDGE_DIR} && git push origin main`. If encryption was enabled, still delete `KB_WORK_DIR`.
+#### R9g. Update Core Mental Map
+
+Apply the same process as Step 13g in Dev Mode. Scan all `[CMM+]` markers emitted during Steps R4 and R5 (reviewers may discover architecture facts, gotchas, or stale CMM entries while reading the code diff). Apply NEW / CONFIRM / CORRECT / DELETE actions and update `core-mental-map/INDEX.md` counts.
+
+PR Review sessions are especially well-suited to confirming (or correcting) existing CMM entries because reviewers read the actual code changes — they can verify whether a CMM fact is still accurate in the patched version.
+
+#### R9h. Save Lessons Learned
+
+Apply the same process as Step 13h in Dev Mode. Collect `[LL+]` markers emitted during Steps R4 and R5, and append them to `lessons-learned/{developer}.md`.
 
 ---
 

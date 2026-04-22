@@ -1102,14 +1102,15 @@ In headless mode, Steps 1–10 run and produce full output with all interactive 
 
 ## Mode Selection
 
-This skill operates in two modes. Detect the mode from the invocation:
+This skill operates in three modes. Detect the mode from the invocation:
 
 | Mode | Trigger phrases | What runs |
 |------|----------------|-----------|
 | **Dev Mode** | `IV-XXXX`, `start dev on IV-XXXX`, `pick up IV-XXXX`, `/dev IV-XXXX` | **Step 0** (KB query) → Steps 1–12 (full dev workflow → proposed fix → PDF) → **Step 13** (KB update) |
 | **PR Review Mode** | `review IV-XXXX`, `PR review IV-XXXX`, `code review IV-XXXX`, `/dev review IV-XXXX` | **Step R0** (KB query) → Steps R1–R8 (code diff review → PDF) → **Step R9** (KB update) |
+| **Estimate Mode** | `estimate IV-XXXX`, `size IV-XXXX`, `point IV-XXXX`, `/dev estimate IV-XXXX` | **Step E0** (KB query) → Steps E1–E7 (planning poker → consensus → Jira update → KB update) |
 
-**→ If the invocation contains the word `review` before or near the ticket key, enter PR Review Mode. Otherwise enter Dev Mode.**
+**→ Check for trigger words in order: `estimate`/`size`/`point` → Estimate Mode. `review` → PR Review Mode. Otherwise → Dev Mode.**
 
 ---
 
@@ -1120,6 +1121,7 @@ Invoke when the developer provides:
 - A Jira ticket key: `PROJ-1234`
 - A phrase like `/prx:dev PROJ-1234` or `/dev PROJ-1234` or "start dev on PROJ-1234" or "pick up PROJ-1234"
 - A phrase like `review PROJ-1234` or `PR review PROJ-1234` or `/dev review PROJ-1234` for code review
+- A phrase like `estimate PROJ-1234` or `size PROJ-1234` or `/dev estimate PROJ-1234` for effort estimation
 
 Do NOT invoke for general code questions unrelated to a Jira ticket.
 
@@ -3715,7 +3717,33 @@ Bryan selects **one** change — either the top HIGH backlog item (if evidence s
 
   Result : Consensus reached ✅ / Not reached ❌ — re-queued in backlog
 
-📝 SKILL.md UPDATE  (only if consensus reached)
+🔒 DEVELOPER CONFIRMATION  (only if consensus reached)
+  Skip this block entirely if AUTO_MODE is Y/YES/true — auto-proceed.
+  Otherwise pause and present the following before touching any file:
+
+  ┌── Proposed SKILL.md edit ─────────────────────────────────────────┐
+  │ Change type   : {Compress / Remove / Clarify / Merge / Fast-path}  │
+  │ Target        : {Step or section name}                             │
+  │ Problem solved: {one sentence — what is wasteful, unclear, or      │
+  │                  redundant}                                        │
+  │ Process impact: {how this concretely improves future sessions —    │
+  │                  e.g. "saves ~15% tokens in Step 7", "removes a    │
+  │                  gate that has never fired", "eliminates repeated   │
+  │                  file reads"}                                      │
+  │ Est. saving   : ~{N}% tokens per session / {qualitative benefit}   │
+  │                                                                    │
+  │ BEFORE: "{exact current wording}"                                  │
+  │ AFTER : "{proposed replacement}"                                   │
+  │                                                                    │
+  │ Approved by: Morgan ✅  Riley ✅  {Engineer} ✅                    │
+  └────────────────────────────────────────────────────────────────────┘
+  → Proceed with this SKILL.md update? [Y/n]:
+
+  Y or Enter → continue to 📝 SKILL.md UPDATE
+  N          → append [DEFERRED by developer: {today}] to the backlog
+               item; skip 📝 SKILL.md UPDATE; close Step 14
+
+📝 SKILL.md UPDATE  (only if consensus reached AND developer confirmed, or AUTO_MODE=Y)
   Version bumped : {current} → {new patch}
   Skill Change Log row appended to SKILL.md (SC-{NNN})
   Queued for push. Sessions since last push: {N} / {PRX_SKILL_UPGRADE_MIN_SESSIONS}
@@ -3738,7 +3766,11 @@ On compaction sessions, Bryan replaces the single-change rule with a **full SKIL
 - Remove or gate any block that has produced zero output across the last `PRX_SKILL_COMPACTION_INTERVAL` sessions (as evidenced by the process-efficiency.md session log)
 - Rewrite any instruction where the output format is inconsistently followed
 
-Compaction requires **all five team members** to approve (Morgan + Riley + Alex + Sam + Jordan). Version bump is MINOR (x.Y.0). Bryan commits the compaction as a single atomic commit: `"vX.Y.0 — Bryan: compaction pass #{N} (~{X}% token reduction)"`.
+Compaction requires **all five team members** to approve (Morgan + Riley + Alex + Sam + Jordan). Version bump is MINOR (x.Y.0).
+
+Before applying any edits, Bryan presents the same **🔒 DEVELOPER CONFIRMATION** gate as in 14c — listing the full compaction diff summary, total estimated token reduction, and all five approvals — then asks `→ Proceed with compaction? [Y/n]:`. Skip the prompt if AUTO_MODE=Y. If the developer declines, append `[COMPACTION DEFERRED by developer: {today}]` to `process-efficiency.md` and skip the commit.
+
+If confirmed (or AUTO_MODE=Y), Bryan commits the compaction as a single atomic commit: `"vX.Y.0 — Bryan: compaction pass #{N} (~{X}% token reduction)"`.
 
 #### 14e. process-efficiency.md Update
 
@@ -4720,6 +4752,288 @@ Identical to Step 14 in Dev Mode with these differences:
 
 ---
 
+## Estimate Mode
+
+Execute these steps when the invocation triggers **Estimate Mode** (see Mode Selection above). Do not run Dev Mode or PR Review Mode steps. Present output for each step as it completes.
+
+Story points measure **effort** — not hours. Each point reflects three combined factors:
+- **Complexity** — how technically difficult or unclear the work is
+- **Risk** — uncertainty, third-party dependencies, regression exposure, unknowns
+- **Repetition** — how familiar the team is with this type of work (high familiarity = fewer points)
+
+Scale (modified Fibonacci): **1 · 2 · 3 · 5 · 8 · 13 · 20 · ?**
+
+| Points | Meaning |
+|--------|---------|
+| 1 | Trivial — very low complexity, minimal risk, team has done this many times |
+| 2 | Simple — low complexity, low risk, familiar territory |
+| 3 | Small — one area of moderate complexity or some risk or limited familiarity |
+| 5 | Medium — notable complexity + some risk, or one meaningful unknown |
+| 8 | Large — high complexity or significant risk or unfamiliar system area |
+| 13 | Very large — multiple complex areas, several risks, needs careful planning |
+| 20 | Epic — too broad; strong recommendation to split before committing |
+| ? | Cannot estimate — spike required to resolve critical unknowns first |
+
+Points are **relative**: a 4-point task is twice the effort of a 2-point task. They are never converted to hours.
+
+Each engineer draws on their **acquired knowledge of the system** — the KB (`core-mental-map/`, `shared/patterns.md`, `shared/gotchas.md`, past ticket records, `lessons-learned/`) and their domain expertise — to score all three dimensions before committing to a vote. The KB is the team's shared memory; it must be actively consulted, not just acknowledged.
+
+Bryan observes silently and runs Step E8 if `PRX_INCLUDE_SM_IN_SESSIONS_ENABLED=Y`. The session ends only when the full team reaches a single agreed story point.
+
+---
+
+### Step E0 — KB Initialisation & System Knowledge Load
+
+Same process as Step 0 in Dev Mode. Pull KB and surface prior knowledge on the ticket's components and labels.
+
+**Additionally**, each engineer reads the following before E2 begins — this is the system knowledge that will drive their estimates:
+
+- `core-mental-map/architecture.md` — component boundaries, ownership, coupling hotspots
+- `core-mental-map/gotchas.md` — non-obvious footguns and edge-case traps in the affected area
+- `core-mental-map/data-flows.md` — write paths, RPC contracts, side-effects
+- `shared/patterns.md` — search for `[ESTIMATE-PATTERN]` entries on the affected components
+- `tickets/` — scan for `## Estimation` sections on past tickets touching the same components
+- `lessons-learned/` — any developer-recorded pitfalls relevant to this area
+- `shared/process-efficiency.md` — check for past estimation accuracy notes
+
+Present the Prior Knowledge block (same format as Step 0) and append an **Estimation-relevant KB findings** subsection:
+
+```
+── Estimation KB Findings ────────────────────────────────────────────
+  Past estimates on similar work:
+  • {TICKET_KEY}: {N}pts — {one-line reason} (accuracy: {over/under/accurate} vs actual)
+  • {or "none found"}
+
+  Known complexity patterns (from patterns.md / gotchas.md):
+  • {pattern 1 relevant to this ticket}
+  • {or "none found"}
+
+  Relevant lessons learned:
+  • {lesson entry or "none found"}
+─────────────────────────────────────────────────────────────────────
+```
+
+---
+
+### Step E1 — Ingest Ticket
+
+Same as Step 1 in Dev Mode. Fetch all standard Jira fields. Also surface:
+- The current **Story Points** field value if already set — show it as context only; instruct the team not to anchor on it during voting
+- Any **sub-tasks** already linked (they reduce scope of the parent)
+- Explicit **acceptance criteria** — the team estimates the full AC, not just the description
+
+---
+
+### Step E2 — Scope & Dimension Analysis
+
+Before any individual votes are cast, the full Engineering Panel jointly maps the ticket against the three story point dimensions, drawing explicitly on the KB findings from E0 and each engineer's system knowledge.
+
+```
+── Scope & Dimension Analysis ────────────────────────────────────────
+  Ticket type : {Bug / Story / Enhancement / Spike}
+  Delivers    : {one-line restatement of what must be done to close the ticket}
+
+  Work areas:
+  ┌──────────────────────┬──────────────────────────────────┬──────────┐
+  │ Area                 │ What changes                     │ Effort   │
+  ├──────────────────────┼──────────────────────────────────┼──────────┤
+  │ Backend              │ {what changes or "—"}            │ Low/Med/High │
+  │ Frontend             │ {what changes or "—"}            │ Low/Med/High │
+  │ Database             │ {schema/migration or "—"}        │ Low/Med/High │
+  │ Infrastructure       │ {config/env/deploy or "—"}       │ Low/Med/High │
+  │ Tests                │ {unit/integration/e2e scope}     │ Low/Med/High │
+  └──────────────────────┴──────────────────────────────────┴──────────┘
+
+  Dimension drivers:
+  ┌─────────────────┬──────────────┬───────────────────────────────────┐
+  │ Dimension       │ Level        │ Evidence (from KB / system knowledge) │
+  ├─────────────────┼──────────────┼───────────────────────────────────┤
+  │ Complexity      │ Low/Med/High │ {what makes it hard or simple — cite KB} │
+  │ Risk            │ Low/Med/High │ {unknowns, dependencies, regression surface} │
+  │ Repetition      │ Familiar/Partial/New │ {KB patterns found / past tickets / new territory} │
+  └─────────────────┴──────────────┴───────────────────────────────────┘
+
+  Unknowns  : {things that, if unresolved, make any estimate unreliable}
+  Dependencies: {external services, teams, or tickets that must land first}
+─────────────────────────────────────────────────────────────────────
+```
+
+**Spike gate:** If there are critical unknowns that make the Complexity or Risk dimension impossible to assess, recommend a spike and stop — do not proceed to E3 unless the developer overrides.
+
+**Split gate:** If the ticket spans 4+ areas at Medium/High effort, recommend splitting into sub-tasks and offer to estimate each separately.
+
+---
+
+### Step E3 — Planning Poker: Round 1
+
+Each engineer independently scores all three dimensions through their domain lens, then commits to a single Fibonacci vote **before** seeing others' numbers. All five votes are revealed simultaneously.
+
+**Domain focus per engineer:**
+
+| Engineer | Complexity lens | Risk lens | Repetition lens |
+|----------|----------------|-----------|-----------------|
+| **Morgan** | Architectural complexity; system design decisions required | System-wide regression risk; dependency chain risk | Has the team solved a structurally similar problem before? |
+| **Alex** | Backend algorithm complexity; API surface changes; data model impact | Data migration risk; third-party API reliability | Are the affected services well-understood by the backend team? |
+| **Sam** | Business logic complexity; cross-layer integration; AC ambiguity | Stakeholder/domain rule uncertainty; acceptance criteria gaps | Has this class of feature been built before in this codebase? |
+| **Jordan** | Infrastructure/config complexity; cross-service protocol changes | Deployment risk; environment-specific behaviour; breaking changes | Is this deployment pattern routine or novel for the team? |
+| **Riley** | Test complexity; observable edge-case surface area | Regression risk; unknown coverage gaps; flaky test likelihood | Does a test harness already exist for this area? |
+
+**Vote card format (each engineer, stated after the simultaneous reveal):**
+
+```
+{Name} — {N} pts
+  Complexity  : {Low/Med/High} — {specific reason, citing system knowledge or KB entry}
+  Risk        : {Low/Med/High} — {specific uncertainty or dependency driving this}
+  Repetition  : {Familiar/Partial/New} — {KB pattern or past ticket reference, or "no prior art found"}
+  Key unknown : {the single thing that, if resolved, would most change their vote}
+```
+
+**Reveal format:**
+
+```
+── Planning Poker — Round 1 ──────────────────────────────────────────
+  🃏  Morgan   │  Alex   │  Sam   │  Jordan  │  Riley
+      {N}      │  {N}    │  {N}   │   {N}    │   {N}
+
+  Range: {min}–{max}   Spread: {max − min} points
+─────────────────────────────────────────────────────────────────────
+```
+
+Immediately print all five vote cards.
+
+If all five votes are identical → skip E4, proceed to E5 with confidence **High**.
+
+---
+
+### Step E4 — Debate & Consensus
+
+Run only when votes differ after any round. Maximum **3 debate rounds** before Morgan makes a binding final call.
+
+Debates must be grounded in the three dimensions — not just "your number feels high." When an engineer challenges another's vote, they must name which dimension they disagree on and cite system knowledge or KB evidence.
+
+#### Debate structure (each round)
+
+1. **Highest voter speaks first** — which dimension(s) are others underweighting, and what system knowledge or KB evidence supports their assessment?
+2. **Lowest voter responds** — which simplifying factors apply, and what KB entries or past patterns support a lower score?
+3. **Remaining engineers react** — one paragraph each: which argument moved them (if any) and why? Are they revising their vote?
+4. **Re-vote** — simultaneous reveal, same format as E3. Label it Round 2, Round 3, etc.
+
+After each re-vote:
+- All votes match → consensus reached; proceed to E5
+  - Round 2 → confidence **Medium**
+  - Round 3 → confidence **Low**
+- Still differ → continue (up to Round 3)
+
+#### Morgan's binding final call (after Round 3 without consensus)
+
+```
+── Morgan — Binding Final Call ───────────────────────────────────────
+  After {N} rounds without consensus:
+  Final estimate : {N} story points
+  Deciding factor: {which dimension was the sticking point and how Morgan
+                    resolved the disagreement — cite specific system
+                    knowledge or KB evidence that tipped the balance}
+  Dissenting view: {who voted differently, their dimension argument, and
+                    why it was not adopted — recorded for transparency}
+  Confidence     : Low — revisit if {specific condition or unknown} changes
+─────────────────────────────────────────────────────────────────────
+```
+
+---
+
+### Step E5 — Final Estimate
+
+```
+══ ESTIMATE RESULT ════════════════════════════════════════════════════
+
+  Story Points : {N}
+  Confidence   : High / Medium / Low
+  Consensus    : Unanimous (Round {N}) / Morgan final call (after Round {N})
+  Ticket       : {TICKET_KEY} — {summary}
+
+  Dimension summary:
+  • Complexity  : {Low/Med/High} — {key driver}
+  • Risk        : {Low/Med/High} — {key driver}
+  • Repetition  : {Familiar/Partial/New} — {key driver}
+
+  Key assumptions:
+  • {assumption 1}
+  • {assumption 2}
+
+  What would change this estimate:
+  • {if X is resolved/discovered} → could shift to {N} pts
+  • {if scope expands to Y} → recommend splitting
+
+  Recommended action:
+  • ✅  Proceed as estimated
+  • ⚠️   Spike first — resolve: {specific unknown}
+  • 🔀  Split recommended — {suggested sub-task breakdown}
+
+══════════════════════════════════════════════════════════════════════
+```
+
+---
+
+### Step E6 — Jira Update
+
+If `AUTO_MODE=Y`, automatically update the Story Points field in Jira to the agreed estimate.
+
+Otherwise, ask:
+```
+→ Update Story Points in Jira to {N}? [Y/n]:
+```
+
+If confirmed (or AUTO_MODE=Y), use the `editJiraIssue` MCP tool to set the story points field, then confirm:
+```
+✅ Jira updated — {TICKET_KEY} story points set to {N}
+```
+
+If declined or MCP unavailable, state the agreed estimate so the developer can update manually.
+
+---
+
+### Step E7 — KB Update
+
+Record the estimation session so future sessions can reference past sizing decisions for similar work.
+
+**1. Ticket file** (`tickets/{TICKET_KEY}.md`) — append an `## Estimation` section:
+```markdown
+## Estimation
+date: {today} | estimate: {N}pts | confidence: {High/Med/Low} | rounds: {N} | consensus: {Unanimous/Morgan call}
+complexity: {Low/Med/High} | risk: {Low/Med/High} | repetition: {Familiar/Partial/New}
+assumptions: {key assumptions, comma-separated}
+what-would-change: {conditions that would shift the estimate}
+```
+
+**2. Shared patterns** (`shared/patterns.md`) — if any dimension driver will recur on future similar tickets, append an `[ESTIMATE-PATTERN]` annotation:
+```markdown
+[ESTIMATE-PATTERN] {component/area}: {insight — e.g. "DB migrations in the X service always push complexity to High due to dual-write requirement"} — first seen: {TICKET_KEY} ({N}pts)
+```
+
+**3. INDEX.md** — add triggers to the relevant Memory Palace rooms for the components touched during estimation.
+
+---
+
+### Step E8 — Bryan's Retrospective (Estimate Mode)
+
+**Skip condition:** Same as Step 14 — if `PRX_INCLUDE_SM_IN_SESSIONS_ENABLED` is not `Y`/`YES`/`true`, skip entirely.
+
+Identical to Step 14 in Dev Mode with these differences:
+- Token audit: run `npx --yes ccusage@latest daily --json` and compute session delta from baseline (same as Step 11)
+- DoD check covers Steps E0–E7
+- Process audit focuses on estimation quality: Did engineers cite KB evidence or rely on gut feel? Were the dimension drivers grounded in system knowledge? Were debate rounds substantive or circular? Did the existing Jira value anchor any votes?
+- Session Log row format:
+  ```
+  date: {today} | developer: {DEVELOPER} | ticket: {TICKET_KEY} | type: Estimate | cost: ${cost} | estimate: {N}pts ({confidence}, {N} rounds) | status: ✅
+  ```
+- No branch creation or code changes — Bryan's SKILL.md improvement proposals focus on the estimation workflow itself
+
+---
+
+---
+
+---
+
 ## Output Format
 
 Present output in clearly labelled sections. Use markdown headings. Keep each section concise but complete.
@@ -4727,6 +5041,8 @@ Present output in clearly labelled sections. Use markdown headings. Keep each se
 **Dev Mode:** Step 0 (KB query) → Steps 1–12 → Step 13 (KB update) → Step 14 (Bryan retrospective). Step 12 produces the PDF confirmation; Step 13 produces the KB update confirmation; Step 14 closes the session.
 
 **PR Review Mode:** Step R0 (KB query) → Steps R1–R8 → Step R9 (KB update) → Step R10 (Bryan retrospective). Step R8 produces the PDF confirmation; Step R9 produces the KB update confirmation; Step R10 closes the session.
+
+**Estimate Mode:** Step E0 (KB query) → Steps E1–E7 (scope → planning poker → debate → consensus → Jira update → KB update) → Step E8 (Bryan retrospective). Step E5 produces the final estimate; Step E7 produces the KB update confirmation; Step E8 closes the session.
 
 ---
 

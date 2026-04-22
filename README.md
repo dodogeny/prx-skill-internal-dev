@@ -1,9 +1,10 @@
 # Dev Skill — Claude Code Plugin `v1.2.2`
 
-A [Claude Code](https://claude.ai/code) plugin that gives Claude a structured, end-to-end developer workflow for Jira tickets. Two modes:
+A [Claude Code](https://claude.ai/code) plugin that gives Claude a structured, end-to-end developer workflow for Jira tickets. Three modes:
 
 - **Dev Mode** — hand Claude a ticket key and it walks through the full cycle: ticket ingestion → root cause analysis → proposed fix → PDF report (12 steps).
 - **PR Review Mode** — hand Claude a ticket key with the word `review` and the engineering panel reviews the code changes on the associated feature branch, producing a structured PDF findings report.
+- **Estimate Mode** — hand Claude a ticket key with the word `estimate` and the full Engineering Panel runs Planning Poker. Each engineer scores the ticket across three dimensions (complexity, risk, repetition) drawing on their acquired system knowledge and the shared KB, then votes simultaneously. Structured debate continues until the team reaches unanimous consensus.
 
 ---
 
@@ -44,6 +45,25 @@ Invoke the skill with a Jira ticket key and Claude runs a structured multi-step 
 11. **Bryan's retrospective** — same as Dev Mode; token audit uses review session stats
 
 **Review verdict:** ✅ APPROVED / ⚠️ APPROVED WITH CONDITIONS / 🔄 REQUEST CHANGES / ❌ REJECT
+
+### Estimate Mode — `/prx:dev estimate PROJ-1234`
+
+Story points measure **effort** — not hours. Each vote scores three dimensions: **Complexity** (how hard), **Risk** (how uncertain), **Repetition** (how familiar). Scale: 1 · 2 · 3 · 5 · 8 · 13 · 20 · ? (spike needed).
+
+Each engineer draws on their **acquired system knowledge** and the shared KB (`core-mental-map/`, `patterns.md`, `gotchas.md`, past ticket estimates, lessons learned) before committing to a vote — ensuring estimates are grounded in what the team actually knows about the codebase, not gut feel.
+
+1. **KB & system knowledge load** — pull KB; each engineer reads architecture, gotchas, data-flows, past estimates on similar components, and lessons learned before voting
+2. **Ingest ticket** — fetch Jira fields, acceptance criteria, linked sub-tasks; surface existing story points as reference only (team does not anchor on it)
+3. **Scope & dimension analysis** — Engineering Panel jointly maps work areas and rates Complexity / Risk / Repetition with KB evidence before any individual votes are cast
+4. **Planning Poker Round 1** — all five engineers vote simultaneously; each scores all three dimensions through their domain lens (Morgan: architecture; Alex: backend; Sam: business logic; Jordan: infrastructure; Riley: testing) citing specific KB entries
+5. **Debate & consensus** — if votes differ, structured rounds anchored to specific dimensions: highest voter explains which dimension is underweighted and why (citing system knowledge); lowest responds with counter-evidence; others react; re-vote
+6. **Morgan's final call** — if no consensus after 3 rounds, Morgan makes a binding decision citing the deciding KB evidence; dissenting view recorded
+7. **Final estimate** — agreed story points, dimension summary, confidence level (High/Medium/Low), key assumptions, what would change the estimate
+8. **Jira update** — optionally writes the agreed story points back to the ticket
+9. **KB update** — records estimate with dimension breakdown and any `[ESTIMATE-PATTERN]` complexity insights for future sessions
+10. **Bryan's retrospective** — audits whether estimates were grounded in KB evidence; proposes SKILL.md improvements (opt-in)
+
+**Confidence levels:** High = unanimous Round 1 · Medium = Round 2 · Low = Round 3+ or Morgan call
 
 ---
 
@@ -174,6 +194,11 @@ If the MCP is configured correctly, Claude returns the issue details.
 **PR Review Mode:**
 ```
 /prx:dev review PROJ-1234
+```
+
+**Estimate Mode:**
+```
+/prx:dev estimate PROJ-1234
 ```
 
 > `/dev` is the shorthand (no namespace prefix). Use `/prx:dev` if another installed plugin also has a `dev` skill.
@@ -470,6 +495,22 @@ tail -20 scripts/poll-jira.log
 
 **Review verdict:** ✅ APPROVED / ⚠️ APPROVED WITH CONDITIONS / 🔄 REQUEST CHANGES / ❌ REJECT
 
+### Estimate Mode (9 steps)
+
+Story points = **Complexity + Risk + Repetition** (not hours). Scale: 1 · 2 · 3 · 5 · 8 · 13 · 20 · ? Each engineer votes through their domain lens, explicitly citing KB and system knowledge.
+
+| Step | What happens |
+|------|-------------|
+| **E0** | KB & system knowledge load — pull KB; each engineer reads `core-mental-map/` (architecture, gotchas, data-flows), `shared/patterns.md` `[ESTIMATE-PATTERN]` entries, past ticket `## Estimation` records, and `lessons-learned/` for the affected components |
+| **E1** | Ingest ticket — fetch all Jira fields and acceptance criteria; surface existing story points as context only (no anchoring) |
+| **E2** | Scope & dimension analysis — Engineering Panel jointly maps work areas and rates Complexity / Risk / Repetition with KB evidence; spike gate (critical unknowns) and split gate (4+ high-effort areas) applied before voting |
+| **E3** | Planning Poker Round 1 — simultaneous vote on 1·2·3·5·8·13·20·?; each engineer scores all three dimensions through their domain lens (Morgan: architecture; Alex: backend; Sam: business logic; Jordan: infra/security; Riley: testing) citing specific KB entries |
+| **E4** | Debate & consensus — rounds anchored to dimensions: highest voter names which dimension is underweighted and cites system evidence; lowest responds with counter-evidence; others react and re-vote; up to 3 rounds |
+| **E5** | Final estimate — story points, dimension summary (C/R/R), confidence (High/Medium/Low), key assumptions, what would change the estimate |
+| **E6** | Jira update — optionally writes agreed story points to the Jira ticket via MCP (`editJiraIssue`) |
+| **E7** | KB update — records estimate with full dimension breakdown in `tickets/{KEY}.md`; appends `[ESTIMATE-PATTERN]` to `shared/patterns.md` if a reusable complexity insight was found |
+| **E8** | Bryan's retrospective — audits whether votes were grounded in KB evidence or gut feel; proposes estimation workflow improvements (opt-in) |
+
 ---
 
 ## Repository Structure
@@ -586,12 +627,14 @@ claude plugin list
 
 ## Changelog
 
-### v1.2.2 — Token Budget Tracking
+### v1.2.2 — Token Budget Tracking + Estimate Mode
 
-- **ccusage integration:** Actual Claude token spend is now measured using [ccusage](https://www.npmjs.com/package/ccusage), which reads Claude Code's local JSONL files offline — no network call, no auth required. ccusage is downloaded automatically via `npx --yes` on first use; the only prerequisite is Node.js.
+- **Estimate Mode:** New third mode (`/prx:dev estimate PROJ-1234`) where the Engineering Panel runs Planning Poker using the Asana story points methodology — effort measured as **Complexity + Risk + Repetition**, not hours, on a modified Fibonacci scale (1·2·3·5·8·13·20·?). Before voting, each engineer loads the KB (`core-mental-map/`, `patterns.md`, `gotchas.md`, past ticket estimates, lessons learned) so votes are grounded in acquired system knowledge, not gut feel. All five engineers vote simultaneously, then debate is structured by dimension (which of the three factors is causing disagreement?) rather than just "your number is too high." Up to 3 rounds; Morgan makes a binding final call if still split. Confidence level (High/Medium/Low) reflects how many rounds were needed. Agreed points are written back to Jira and recorded in the KB as `[ESTIMATE-PATTERN]` entries for future sessions.
+- **ccusage integration:** Actual Claude token spend is now measured using [ccusage](https://www.npmjs.com/package/ccusage), which reads Claude Code's local JSONL files offline — no network call, no auth required. ccusage is downloaded automatically via `npx --yes` on first use; Node.js is installed automatically if not present (Homebrew → nvm on macOS, apt/dnf → nvm on Linux).
 - **SessionStart budget check:** `scripts/check-budget.sh` runs at every session start. It captures a daily-spend baseline to `/tmp/.prx-session-start-spend` (used by Step 11 for per-session delta) and injects the current month's actual spend and budget status into Claude's session context. A system-level warning is surfaced when spend ≥ 80%.
-- **Step 11 / R7 — actual costs:** Instead of estimating tokens from content volume, Claude now runs `npx ccusage@latest daily --json` and subtracts the session-start baseline to report the exact cost of the current session. Manual estimation is retained as a fallback when Node.js is unavailable.
-- **Step 14 / R10 (Bryan) — actual monthly spend:** Bryan now runs `npx ccusage@latest monthly --json` to get the authoritative monthly figure instead of summing cost fields from `process-efficiency.md` session records. Falls back to the manual sum if ccusage is unavailable.
+- **Step 11 / R7 / E8 — actual costs:** Instead of estimating tokens from content volume, Claude now runs `npx ccusage@latest daily --json` and subtracts the session-start baseline to report the exact cost of the current session. Manual estimation is retained as a fallback when Node.js is unavailable.
+- **Step 14 / R10 / E8 (Bryan) — actual monthly spend:** Bryan now runs `npx ccusage@latest monthly --json` to get the authoritative monthly figure instead of summing cost fields from `process-efficiency.md` session records. Falls back to the manual sum if ccusage is unavailable.
+- **Developer confirmation gate:** Before Bryan applies any approved SKILL.md change (Step 14c) or compaction pass (Step 14d), an interactive confirmation box shows the exact before/after wording, problem solved, process impact, and estimated token saving. The developer must explicitly confirm before any file is modified. Skipped automatically in `AUTO_MODE=Y`.
 - **Permissions:** `Bash(npx --yes ccusage@latest *)` added to `.claude/settings.local.json` allowlist so the budget check runs without prompts.
 
 ### v1.2.1

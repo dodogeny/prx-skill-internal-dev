@@ -80,6 +80,12 @@ PRX_MONTHLY_BUDGET        = (optional — monthly Claude subscription budget in 
                                first of each calendar month, and flags ⚠️ when spend exceeds 80% of
                                the budget or ❌ when the budget is fully consumed.
                                Only relevant when PRX_INCLUDE_SM_IN_SESSIONS_ENABLED=Y.)
+
+FORCE_FULL_RUN     = (optional — Y/YES/true to force every step in the workflow to execute in full,
+                               even when the ticket has been analysed in a prior session and the KB
+                               already contains results. Without this flag the skill may condense
+                               steps 1–12 into a summary on repeat runs. Set to Y when replaying
+                               a ticket to produce a fresh, complete analysis from scratch; default: N.)
 ```
 
 **`KB_MODE=local` (default):** KB lives in the developer's home directory. No git sync. No encryption. Private to one machine.
@@ -1066,6 +1072,17 @@ fi
 **Remote repo does not exist at all** (the URL itself is invalid or the repo was never created): `git ls-remote` will fail with a fatal error. The agent logs `KB_PUSH_WARN: KB repository '${PRX_KB_REPO}' does not exist or is inaccessible. Create the private repo first, then retry.` and skips the push without failing the session.
 
 ## Headless Mode
+
+If `FORCE_FULL_RUN` is set to `Y`, `YES`, or `true` (case-insensitive), execute every step in the workflow in full — do not condense, summarise, or skip any step even if the ticket was analysed in a prior session and results already exist in the KB. Default is `N`. Resolve at session start:
+
+```bash
+_ffr=$(echo "${FORCE_FULL_RUN:-N}" | tr '[:lower:]' '[:upper:]')
+[ "$_ffr" = "Y" ] || [ "$_ffr" = "YES" ] || [ "$_ffr" = "TRUE" ] && FORCE_FULL_RUN_ON=1 || FORCE_FULL_RUN_ON=0
+```
+
+When `FORCE_FULL_RUN_ON=1`: proceed through every numbered step in sequence regardless of prior KB entries, existing reports, or session count. Announce each step header as normal.
+
+---
 
 If `AUTO_MODE` is set to `Y`, `YES`, or `true` (case-insensitive), the skill runs in **headless mode** with no interactive prompts and no blocking gates. Default is `N` (interactive). Resolve at session start:
 
@@ -5100,7 +5117,7 @@ Examples: `### Step 3 — Understand the Problem`, `### Step R5 — Engineering 
 
 The Prevoyant Server dashboard detects these markers in real time to drive the pipeline progress display. Without them the pipeline section stays blank.
 
-**Dev Mode:** Step 0 (KB query) → Steps 1–12 → Step 13 (KB update) → Step 14 (Bryan retrospective). Step 12 produces the PDF confirmation; Step 13 produces the KB update confirmation; Step 14 closes the session.
+**Dev Mode:** Step 0 (KB query) → Steps 1–12 → Step 13 (KB update) → Step 14 (Bryan retrospective). Step 12 produces the PDF confirmation; Step 13 produces the KB update confirmation; Step 14 closes the session. When `FORCE_FULL_RUN_ON=1`, all steps 1–12 must run in full — never condense or jump ahead.
 
 **PR Review Mode:** Step R0 (KB query) → Steps R1–R8 → Step R9 (KB update) → Step R10 (Bryan retrospective). Step R8 produces the PDF confirmation; Step R9 produces the KB update confirmation; Step R10 closes the session.
 

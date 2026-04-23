@@ -139,7 +139,15 @@ function loadSessions() {
       if (!file.endsWith('-session.json')) continue;
       try {
         const raw = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
-        tickets.set(raw.ticketKey, deserializeDates(raw));
+        const entry = deserializeDates(raw);
+        if (entry.status === 'running' || entry.status === 'queued') {
+          entry.status = 'interrupted';
+          entry.completedAt = new Date();
+          tickets.set(raw.ticketKey, entry);
+          saveSession(raw.ticketKey); // persist corrected state to disk
+        } else {
+          tickets.set(raw.ticketKey, entry);
+        }
         count++;
       } catch (_) { /* corrupt session file — skip */ }
     }
@@ -180,9 +188,12 @@ function recordStarted(ticketKey) {
 
 function recordCompleted(ticketKey, success) {
   const entry = tickets.get(ticketKey) || { ticketKey, source: 'unknown', queuedAt: new Date(), outputLog: [] };
-  const stages = (entry.stages || []).map(s =>
-    s.status === 'active' ? { ...s, status: success ? 'done' : 'failed', completedAt: new Date() } : s
-  );
+  const now = new Date();
+  const stages = (entry.stages || []).map(s => {
+    if (s.status === 'active')  return { ...s, status: success ? 'done' : 'failed', completedAt: now };
+    if (s.status === 'pending') return { ...s, status: 'skipped' };
+    return s;
+  });
   const updated = { ...entry, completedAt: new Date(), status: success ? 'success' : 'failed', stages };
   tickets.set(ticketKey, updated);
   saveSession(ticketKey);
@@ -208,9 +219,13 @@ function recordStepActive(ticketKey, stepId) {
 
   const normalised = String(stepId).toUpperCase();
   const now = new Date();
-  entry.stages = stages.map(s => {
-    if (s.id === normalised)  return { ...s, status: 'active', startedAt: now };
-    if (s.status === 'active') return { ...s, status: 'done',   completedAt: now };
+  const targetIdx = stages.findIndex(s => s.id === normalised);
+  entry.stages = stages.map((s, i) => {
+    if (s.id === normalised)   return { ...s, status: 'active',  startedAt: now };
+    if (s.status === 'active') return { ...s, status: 'done',    completedAt: now };
+    // Any pending stage that comes before the new active stage was jumped over
+    if (s.status === 'pending' && targetIdx > -1 && i < targetIdx)
+      return { ...s, status: 'skipped' };
     return s;
   });
   tickets.set(ticketKey, entry);

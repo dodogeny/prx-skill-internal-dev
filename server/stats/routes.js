@@ -80,7 +80,8 @@ const BASE_CSS = `
   .badge-queued  { background: #f3f4f6; color: #6b7280; }
   .badge-running { background: #dbeafe; color: #1d4ed8; }
   .badge-success { background: #dcfce7; color: #166534; }
-  .badge-failed  { background: #fee2e2; color: #991b1b; }
+  .badge-failed       { background: #fee2e2; color: #991b1b; }
+  .badge-interrupted  { background: #fff7ed; color: #9a3412; }
   .mode-badge { padding: 2px 8px; border-radius: 8px; font-size: 0.72rem; font-weight: 600; }
   .mode-dev      { background: #e0f2fe; color: #0369a1; }
   .mode-review   { background: #f3e8ff; color: #7e22ce; }
@@ -96,11 +97,13 @@ const ICONS = {
   queued:  (n = 18) => `<svg xmlns="http://www.w3.org/2000/svg" width="${n}" height="${n}" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
   running: (n = 18) => `<svg class="spin" xmlns="http://www.w3.org/2000/svg" width="${n}" height="${n}" viewBox="0 0 24 24" fill="none" stroke="#0d6efd" stroke-width="2.5" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>`,
   success: (n = 18) => `<svg xmlns="http://www.w3.org/2000/svg" width="${n}" height="${n}" viewBox="0 0 24 24" fill="none" stroke="#198754" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`,
-  failed:  (n = 18) => `<svg xmlns="http://www.w3.org/2000/svg" width="${n}" height="${n}" viewBox="0 0 24 24" fill="none" stroke="#dc3545" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`,
+  failed:       (n = 18) => `<svg xmlns="http://www.w3.org/2000/svg" width="${n}" height="${n}" viewBox="0 0 24 24" fill="none" stroke="#dc3545" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`,
+  interrupted:  (n = 18) => `<svg xmlns="http://www.w3.org/2000/svg" width="${n}" height="${n}" viewBox="0 0 24 24" fill="none" stroke="#ea580c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`,
+  skipped:      (n = 18) => `<svg xmlns="http://www.w3.org/2000/svg" width="${n}" height="${n}" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>`,
 };
 
 function sessionIconBadge(status) {
-  const labels = { queued: 'Queued', running: 'Running', success: 'Done', failed: 'Failed' };
+  const labels = { queued: 'Queued', running: 'Running', success: 'Done', failed: 'Failed', interrupted: 'Interrupted' };
   return `<span title="${labels[status] || status}" style="display:inline-flex;align-items:center;gap:6px">
     ${(ICONS[status] || ICONS.queued)(18)}<span class="badge badge-${status}">${labels[status] || status}</span>
   </span>`;
@@ -335,10 +338,11 @@ function stagePipelineHtml(stages) {
     const isLast = i === stages.length - 1;
     let icon, cls;
     switch (s.status) {
-      case 'active':  icon = ICONS.running(20); cls = 'stage-active';  break;
-      case 'done':    icon = ICONS.success(20); cls = 'stage-done';    break;
-      case 'failed':  icon = ICONS.failed(20);  cls = 'stage-failed';  break;
-      default:        icon = ICONS.queued(20);  cls = 'stage-pending'; break;
+      case 'active':  icon = ICONS.running(20);  cls = 'stage-active';  break;
+      case 'done':    icon = ICONS.success(20);  cls = 'stage-done';    break;
+      case 'failed':  icon = ICONS.failed(20);   cls = 'stage-failed';  break;
+      case 'skipped': icon = ICONS.skipped(20);  cls = 'stage-skipped'; break;
+      default:        icon = ICONS.queued(20);   cls = 'stage-pending'; break;
     }
     const d = s.startedAt ? dur(s.startedAt, s.completedAt || (s.status === 'active' ? null : undefined)) : '';
     return `<div class="pipeline-item">
@@ -430,6 +434,7 @@ function renderDetail(ticket, warn, warnMode) {
     .stage-active  { background:#eff6ff; border-color:#93c5fd; box-shadow:0 0 0 3px #dbeafe; }
     .stage-done    { background:#f0fdf4; border-color:#86efac; }
     .stage-failed  { background:#fef2f2; border-color:#fca5a5; }
+    .stage-skipped { background:#f9fafb; border-color:#e5e7eb; opacity:0.55; }
     .pipeline-arrow { font-size:1.2rem; color:#d1d5db; padding:0 4px; }
     .progress-wrap { background:#f0f1f5; border-radius:99px; height:6px; overflow:hidden; margin-top:1rem; }
     .progress-bar  { height:100%; border-radius:99px; background:linear-gradient(90deg,#0d6efd,#198754); transition:width .4s; }

@@ -35,7 +35,7 @@ Write-Host "Repo     : $PROJECT_ROOT"
 Write-Host "======================================"
 
 # ── 1. uvx (Jira MCP) ─────────────────────────────────────────────────────────
-step "1/5  uvx  (Jira MCP server)"
+step "1/6  uvx  (Jira MCP server)"
 
 if (cmd_exists 'uvx') {
     ok "uvx already installed"
@@ -57,7 +57,7 @@ if (cmd_exists 'uvx') {
 }
 
 # ── 2. Node.js (ccusage) ──────────────────────────────────────────────────────
-step "2/5  Node.js  (ccusage budget tracking)"
+step "2/6  Node.js  (ccusage budget tracking)"
 
 if (cmd_exists 'node') {
     ok "Node.js already installed ($(node --version 2>$null))"
@@ -102,7 +102,7 @@ if (cmd_exists 'node') {
 }
 
 # ── 3. pandoc (PDF generation) ────────────────────────────────────────────────
-step "3/5  pandoc  (PDF reports — optional, Chrome/HTML fallback available)"
+step "3/6  pandoc  (PDF reports — optional, Chrome/HTML fallback available)"
 
 if (cmd_exists 'pandoc') {
     ok "pandoc already installed ($(pandoc --version 2>$null | Select-Object -First 1))"
@@ -148,7 +148,7 @@ if (cmd_exists 'pandoc') {
 }
 
 # ── 4. .env ───────────────────────────────────────────────────────────────────
-step "4/5  .env  (environment file)"
+step "4/6  .env  (environment file)"
 
 $EnvFile    = Join-Path $PROJECT_ROOT ".env"
 $EnvExample = Join-Path $PROJECT_ROOT ".env.example"
@@ -166,7 +166,7 @@ if (Test-Path $EnvFile) {
 }
 
 # ── 5. Claude Code settings.json (marketplace registration) ───────────────────
-step "5/5  Claude Code marketplace registration"
+step "5/6  Claude Code marketplace registration"
 
 $SettingsFile = Join-Path $env:USERPROFILE ".claude\settings.json"
 $SettingsDir  = Split-Path -Parent $SettingsFile
@@ -201,6 +201,53 @@ try {
 } catch {
     err "Could not update settings.json: $_"
     info "Add the marketplace manually (see README)"
+}
+
+# ── 6. .claude/settings.local.json (hooks + permissions) ─────────────────────
+step "6/6  settings.local.json  (SessionStart hooks + ccusage permission)"
+
+$LocalSettings = Join-Path $PROJECT_ROOT ".claude\settings.local.json"
+$LocalDir = Split-Path -Parent $LocalSettings
+if (-not (Test-Path $LocalDir)) { New-Item -ItemType Directory -Path $LocalDir -Force | Out-Null }
+
+if (Test-Path $LocalSettings) {
+    ok "settings.local.json already exists — skipping"
+    info "To regenerate, delete it and re-run setup."
+} else {
+    try {
+        $config = [PSCustomObject]@{
+            permissions = [PSCustomObject]@{
+                allow = @(
+                    "Bash(npx --yes ccusage@latest *)",
+                    "Bash(bash scripts/check-budget.sh)",
+                    "Bash(bash .claude/load-env.sh)"
+                )
+            }
+            hooks = [PSCustomObject]@{
+                SessionStart = @(
+                    [PSCustomObject]@{
+                        hooks = @(
+                            [PSCustomObject]@{
+                                type          = "command"
+                                command       = "bash .claude/load-env.sh"
+                                statusMessage = "Loading .env..."
+                            },
+                            [PSCustomObject]@{
+                                type          = "command"
+                                command       = "bash scripts/check-budget.sh"
+                                statusMessage = "Checking monthly Claude budget..."
+                            }
+                        )
+                    }
+                )
+            }
+        }
+        $config | ConvertTo-Json -Depth 10 | Set-Content $LocalSettings -Encoding UTF8
+        ok "settings.local.json created (SessionStart hooks + ccusage permission)"
+    } catch {
+        err "Could not create settings.local.json: $_"
+        info "Create manually — see README"
+    }
 }
 
 # ── summary ───────────────────────────────────────────────────────────────────

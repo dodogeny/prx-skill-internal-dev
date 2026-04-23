@@ -146,7 +146,7 @@ printf "════════════════════════
 
 # ── 1. uvx (Jira MCP) ─────────────────────────────────────────────────────────
 
-step "1/5  uvx  (Jira MCP server)"
+step "1/6  uvx  (Jira MCP server)"
 
 if command -v uvx &>/dev/null; then
   ok "uvx already installed"
@@ -171,7 +171,7 @@ fi
 
 # ── 2. Node.js (ccusage) ──────────────────────────────────────────────────────
 
-step "2/5  Node.js  (ccusage budget tracking)"
+step "2/6  Node.js  (ccusage budget tracking)"
 
 if locate_npx &>/dev/null; then
   ok "Node.js already installed ($(node --version 2>/dev/null || echo 'found'))"
@@ -222,7 +222,7 @@ fi
 
 # ── 3. pandoc (PDF generation) ────────────────────────────────────────────────
 
-step "3/5  pandoc  (PDF reports — optional, Chrome/HTML fallback available)"
+step "3/6  pandoc  (PDF reports — optional, Chrome/HTML fallback available)"
 
 if command -v pandoc &>/dev/null; then
   ok "pandoc already installed ($(pandoc --version 2>/dev/null | head -1 || echo 'found'))"
@@ -260,7 +260,7 @@ fi
 
 # ── 4. .env ───────────────────────────────────────────────────────────────────
 
-step "4/5  .env  (environment file)"
+step "4/6  .env  (environment file)"
 
 ENV_FILE="$PROJECT_ROOT/.env"
 ENV_EXAMPLE="$PROJECT_ROOT/.env.example"
@@ -279,7 +279,7 @@ fi
 
 # ── 5. Claude Code settings.json (marketplace registration) ───────────────────
 
-step "5/5  Claude Code marketplace registration"
+step "5/6  Claude Code marketplace registration"
 
 # On WSL, Claude Code runs on Windows — write to the Windows user profile.
 # On Git Bash, $HOME already maps to the Windows user folder.
@@ -335,6 +335,64 @@ if [ $? -eq 0 ]; then
   ok "settings.json updated"
 else
   err "Could not update settings.json — add the marketplace manually (see README)"
+fi
+
+# ── 6. .claude/settings.local.json (hooks + permissions) ─────────────────────
+
+step "6/6  settings.local.json  (SessionStart hooks + ccusage permission)"
+
+LOCAL_SETTINGS="$PROJECT_ROOT/.claude/settings.local.json"
+mkdir -p "$PROJECT_ROOT/.claude"
+
+if [ -f "$LOCAL_SETTINGS" ]; then
+  ok "settings.local.json already exists — skipping"
+  info "To regenerate, delete it and re-run setup."
+else
+  python3 - "$LOCAL_SETTINGS" <<'PYEOF'
+import json, sys
+
+path = sys.argv[1]
+
+config = {
+    "permissions": {
+        "allow": [
+            "Bash(npx --yes ccusage@latest *)",
+            "Bash(bash scripts/check-budget.sh)",
+            "Bash(bash .claude/load-env.sh)"
+        ]
+    },
+    "hooks": {
+        "SessionStart": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "bash .claude/load-env.sh",
+                        "statusMessage": "Loading .env..."
+                    },
+                    {
+                        "type": "command",
+                        "command": "bash scripts/check-budget.sh",
+                        "statusMessage": "Checking monthly Claude budget..."
+                    }
+                ]
+            }
+        ]
+    }
+}
+
+with open(path, "w") as f:
+    json.dump(config, f, indent=2)
+    f.write("\n")
+
+print(f"       created {path}")
+PYEOF
+
+  if [ $? -eq 0 ]; then
+    ok "settings.local.json created (SessionStart hooks + ccusage permission)"
+  else
+    err "Could not create settings.local.json — create manually (see README)"
+  fi
 fi
 
 # ── summary ───────────────────────────────────────────────────────────────────

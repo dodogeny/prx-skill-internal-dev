@@ -1,8 +1,36 @@
 'use strict';
 
-const { spawn } = require('child_process');
-const config = require('../config/env');
-const tracker = require('../stats/tracker');
+const { spawn }   = require('child_process');
+const fs          = require('fs');
+const os          = require('os');
+const path        = require('path');
+const config      = require('../config/env');
+const tracker     = require('../stats/tracker');
+
+// Build a temp MCP config that uses mcp-atlassian with API-token auth.
+// When JIRA_URL + JIRA_USERNAME + JIRA_API_TOKEN are present in the env block,
+// mcp-atlassian uses basic auth instead of OAuth — no browser pop-up needed.
+// Falls back to the static .mcp.json when credentials are not configured.
+function buildMcpConfig() {
+  const { jiraUrl, jiraUsername, jiraToken } = config;
+  if (!jiraUrl || !jiraUsername || !jiraToken) return config.mcpConfigFile;
+
+  const tmp = path.join(os.tmpdir(), `prevoyant-mcp-${process.pid}.json`);
+  fs.writeFileSync(tmp, JSON.stringify({
+    mcpServers: {
+      jira: {
+        command: 'uvx',
+        args: ['mcp-atlassian'],
+        env: {
+          JIRA_URL:       jiraUrl,
+          JIRA_USERNAME:  jiraUsername,
+          JIRA_API_TOKEN: jiraToken,
+        },
+      },
+    },
+  }));
+  return tmp;
+}
 
 // Matches "Step 3 —", "Step R5 —", "Step 14 —" at the start of a line or after markdown markers.
 // The em-dash / en-dash is the canonical separator used in SKILL.md step headers.
@@ -23,12 +51,15 @@ function runClaudeAnalysis(ticketKey, mode = 'dev') {
   return new Promise((resolve, reject) => {
     console.log(`[runner] Spawning claude for ${ticketKey} (mode: ${mode})`);
 
+    const mcpConfig = buildMcpConfig();
+    const usingTempConfig = mcpConfig !== config.mcpConfigFile;
+
     const proc = spawn(
       'claude',
       [
         '--dangerously-skip-permissions',
         '--print', modePrompt(ticketKey, mode),
-        '--mcp-config', config.mcpConfigFile,
+        '--mcp-config', mcpConfig,
         '--output-format', 'stream-json',
         '--verbose',
       ],
@@ -80,6 +111,7 @@ function runClaudeAnalysis(ticketKey, mode = 'dev') {
     });
 
     proc.on('close', code => {
+      if (usingTempConfig) try { fs.unlinkSync(mcpConfig); } catch (_) {}
       if (code === 0) {
         resolve();
       } else {

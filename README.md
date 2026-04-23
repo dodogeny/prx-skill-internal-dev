@@ -448,6 +448,16 @@ tail -20 scripts/poll-jira.log
 
 ---
 
+## Prevoyant Server
+
+An optional Node.js service that runs alongside the plugin as an always-on ambient agent. It receives Jira webhook events, queues tickets for analysis, spawns Claude, and surfaces live progress on a web dashboard — so tickets are processed automatically the moment they land in your queue, with no manual invocation needed.
+
+**Key capabilities:** real-time webhook receiver · live pipeline dashboard · job queue with stop/kill · session persistence across restarts · automatic PDF report discovery
+
+→ **[Full documentation: docs/prevoyant-server.md](docs/prevoyant-server.md)**
+
+---
+
 ## What It Does — Step Reference
 
 ### Dev Mode (12 steps)
@@ -515,6 +525,17 @@ Story points = **Complexity + Risk + Repetition** (not hours). Scale: 1 · 2 · 
 │   ├── package.json
 │   └── skills/dev/
 │       └── SKILL.md              # All skill logic lives here
+├── server/                       # Prevoyant Server — optional ambient agent (see docs/prevoyant-server.md)
+│   ├── index.js                  # Express app entry point
+│   ├── dashboard/                # Dashboard routes, ticket tracker, pipeline stage definitions
+│   ├── queue/                    # FIFO job queue (one Claude session at a time)
+│   ├── runner/                   # Claude CLI spawner + poll scheduler
+│   ├── webhooks/                 # Jira webhook receiver
+│   └── scripts/
+│       ├── start.sh              # Start server in background
+│       └── stop.sh               # Stop server by PID
+├── docs/
+│   └── prevoyant-server.md       # Full Prevoyant Server documentation
 ├── scripts/
 │   ├── setup.sh                  # One-shot prerequisite installer (macOS / Linux / WSL / Git Bash)
 │   ├── setup.ps1                 # One-shot prerequisite installer (Windows — PowerShell)

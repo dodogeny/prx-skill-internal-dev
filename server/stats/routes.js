@@ -350,6 +350,7 @@ function stagePipelineHtml(stages) {
         <div class="stage-icon">${icon}</div>
         <div class="stage-name">Step ${s.id}</div>
         <div class="stage-label">${s.label}</div>
+        ${s.status === 'skipped' ? '<div class="stage-skipped-badge">Skipped</div>' : ''}
         ${d ? `<div class="stage-dur">${d}</div>` : ''}
       </div>
       ${!isLast ? '<div class="pipeline-arrow">›</div>' : ''}
@@ -434,6 +435,8 @@ function renderDetail(ticket, warn, warnMode) {
     .stage-done    { background:#f0fdf4; border-color:#86efac; }
     .stage-failed  { background:#fef2f2; border-color:#fca5a5; }
     .stage-skipped { background:#f9fafb; border-color:#e5e7eb; opacity:0.55; }
+    .stage-skipped-badge { font-size:0.6rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em;
+                           color:#9ca3af; background:#e5e7eb; border-radius:4px; padding:1px 5px; margin-top:2px; }
     .pipeline-arrow { font-size:1.2rem; color:#d1d5db; padding:0 4px; }
     .progress-wrap { background:#f0f1f5; border-radius:99px; height:6px; overflow:hidden; margin-top:1rem; }
     .progress-bar  { height:100%; border-radius:99px; background:linear-gradient(90deg,#0d6efd,#198754); transition:width .4s; }

@@ -71,9 +71,10 @@ function startDiskMonitor() {
   if (process.env.PRX_DISK_MONITOR_ENABLED !== 'Y') return;
 
   const workerData = {
-    intervalMins:        parseInt(process.env.PRX_DISK_MONITOR_INTERVAL_MINS  || '60', 10),
-    cleanupIntervalDays: parseInt(process.env.PRX_DISK_CLEANUP_INTERVAL_DAYS  || '7',  10),
-    alertPct:            parseInt(process.env.PRX_DISK_CAPACITY_ALERT_PCT     || '80', 10),
+    intervalMins:        parseInt(process.env.PRX_DISK_MONITOR_INTERVAL_MINS  || '60',  10),
+    cleanupIntervalDays: parseInt(process.env.PRX_DISK_CLEANUP_INTERVAL_DAYS  || '7',   10),
+    maxSizeMB:           parseInt(process.env.PRX_PREVOYANT_MAX_SIZE_MB       || '500', 10),
+    alertPct:            parseInt(process.env.PRX_DISK_CAPACITY_ALERT_PCT     || '80',  10),
     smtpHost: process.env.PRX_SMTP_HOST || '',
     smtpPort: process.env.PRX_SMTP_PORT || '587',
     smtpUser: process.env.PRX_SMTP_USER || '',
@@ -94,7 +95,7 @@ function startDiskMonitor() {
     if (code !== 0) console.error(`[disk-monitor] Worker thread exited with code ${code}`);
   });
 
-  console.log(`[prevoyant-server] Disk monitor active — check every ${workerData.intervalMins}m, alert at ${workerData.alertPct}% usage`);
+  console.log(`[prevoyant-server] Disk monitor active — check every ${workerData.intervalMins}m, alert at ${workerData.alertPct}% of ${workerData.maxSizeMB} MB quota`);
 }
 
 // Signal graceful stop to watchdog before this process exits so it doesn't

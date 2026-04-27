@@ -129,7 +129,8 @@ fi
 # ── Build Jira MCP config for the Claude invocation ───────────────────────────
 # The Atlassian MCP is scoped to the insight project directory; poll-jira.sh
 # runs from Scripts so we inject the config explicitly via --mcp-config.
-MCP_CONFIG_FILE="$(mktemp /tmp/poll-jira-mcp-XXXXXX.json)"
+MCP_CONFIG_FILE="$(mktemp /tmp/poll-jira-mcp-XXXXXX.json)" || { echo "$(date '+%Y-%m-%d %H:%M:%S') mktemp failed — aborting" >> "$LOG_FILE"; exit 1; }
+trap 'rm -f "$MCP_CONFIG_FILE" "$TICKET_DATA_FILE"' EXIT
 python3 -c "
 import json, sys
 print(json.dumps({

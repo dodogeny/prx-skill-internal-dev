@@ -1,8 +1,8 @@
 'use strict';
 
 // Disk monitor — runs as a worker_threads thread inside prevoyant-server.
-// Periodically measures disk usage of ~/.prevoyant/ and overall disk capacity.
-// Alerts via email when usage crosses the configured threshold.
+// Periodically measures disk usage of ~/.prevoyant/ against a configured quota.
+// Alerts via email when the folder size exceeds that quota.
 // Marks a pending-cleanup flag when the cleanup interval has elapsed;
 // the dashboard shows a confirmation UI before any files are deleted.
 
@@ -17,6 +17,7 @@ const tls  = require('tls');
 const {
   intervalMins        = 60,
   cleanupIntervalDays = 7,
+  maxSizeMB           = 500,
   alertPct            = 80,
   smtpHost            = '',
   smtpPort            = '587',
@@ -24,6 +25,8 @@ const {
   smtpPass            = '',
   emailTo             = '',
 } = workerData || {};
+
+const alertThresholdMB = maxSizeMB * (alertPct / 100);
 
 const PREVOYANT_DIR  = path.join(os.homedir(), '.prevoyant');
 const SERVER_DIR     = path.join(PREVOYANT_DIR, 'server');
@@ -246,14 +249,15 @@ function appendLog(entry) {
 
 // ── Alert builders ────────────────────────────────────────────────────────────
 
-function diskAlert(usedPct, prevoyantMB, freeGB) {
-  const subject = `[Prevoyant] WARNING — Disk usage at ${usedPct}%`;
+function diskAlert(prevoyantMB, freeGB) {
+  const subject = `[Prevoyant] WARNING — .prevoyant folder at ${prevoyantMB.toFixed(0)} MB (${alertPct}% of ${maxSizeMB} MB quota)`;
   const body = [
-    'Prevoyant Server has detected high disk usage on this machine.',
+    `Prevoyant Server has detected that the ~/.prevoyant/ folder has reached ${alertPct}% of its configured size quota.`,
     '',
-    `  Overall disk used : ${usedPct}% (threshold: ${alertPct}%)`,
+    `  .prevoyant size   : ${prevoyantMB.toFixed(1)} MB`,
+    `  Alert threshold   : ${alertThresholdMB.toFixed(0)} MB (${alertPct}% of ${maxSizeMB} MB quota)`,
+    `  Size quota        : ${maxSizeMB} MB`,
     `  Free disk space   : ${freeGB.toFixed(1)} GB`,
-    `  .prevoyant folder : ${prevoyantMB.toFixed(1)} MB`,
     `  Detected at       : ${new Date().toUTCString()}`,
     '',
     'To free up space, visit the dashboard and use the Disk Monitor cleanup tool:',
@@ -311,7 +315,9 @@ async function tick() {
     diskUsedPct:     usedPct,
     lastCleanupAt:   existing.lastCleanupAt || null,
     pendingCleanup,
+    maxSizeMB,
     alertPct,
+    alertThresholdMB: parseFloat(alertThresholdMB.toFixed(0)),
     cleanupIntervalDays,
   };
   writeStatus(status);
@@ -326,13 +332,13 @@ async function tick() {
     parentPort.postMessage({ type: 'status', ...status });
   }
 
-  // Alert when disk usage crosses threshold (with cooldown to avoid spam)
-  if (usedPct >= alertPct) {
+  // Alert when .prevoyant reaches alertPct% of its quota (with cooldown to avoid spam)
+  if (prevoyantMB >= alertThresholdMB) {
     const cooldownOk = !lastAlertAt || (Date.now() - lastAlertAt) >= ALERT_COOLDOWN;
     if (cooldownOk) {
       lastAlertAt = Date.now();
-      const { subject, body } = diskAlert(usedPct, prevoyantMB, freeGB);
-      log('warn', `Disk at ${usedPct}% — sending alert to ${emailTo}`);
+      const { subject, body } = diskAlert(prevoyantMB, freeGB);
+      log('warn', `.prevoyant at ${prevoyantMB.toFixed(1)} MB — ${alertPct}% of ${maxSizeMB} MB quota — sending alert to ${emailTo}`);
       await sendEmail(subject, body).catch(e => log('error', `Alert send failed: ${e.message}`));
     }
   }
@@ -359,6 +365,6 @@ if (parentPort) {
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
-log('info', `Started — checking every ${intervalMins}m, alert at ${alertPct}% disk usage`);
+log('info', `Started — checking every ${intervalMins}m, alert at ${alertPct}% of ${maxSizeMB} MB quota (${alertThresholdMB.toFixed(0)} MB)`);
 tick();
 setInterval(tick, intervalMins * 60 * 1000);

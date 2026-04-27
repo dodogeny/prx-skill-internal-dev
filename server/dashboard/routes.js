@@ -100,7 +100,7 @@ function fetchAnthropicCostReport(adminKey) {
   const start = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01T00:00:00Z`;
 
   return new Promise((resolve, reject) => {
-    const params = `starting_at=${encodeURIComponent(start)}&bucket_width=day`;
+    const params = `starting_at=${encodeURIComponent(start)}&bucket_width=1d`;
     const options = {
       hostname: 'api.anthropic.com',
       path:     `/v1/organizations/cost_report?${params}`,
@@ -1447,8 +1447,10 @@ function renderDisk(status, diskLog, flash) {
   const diskTotal       = status.diskTotal    || 0;
   const lastCleanupAt   = status.lastCleanupAt  ? new Date(status.lastCleanupAt) : null;
   const updatedAt       = status.updatedAt      ? new Date(status.updatedAt)     : null;
-  const alertPct        = status.alertPct       || 80;
-  const cleanupInterval = status.cleanupIntervalDays || 7;
+  const maxSizeMB         = status.maxSizeMB           || 500;
+  const alertPct          = status.alertPct             || 80;
+  const alertThresholdMB  = status.alertThresholdMB     || (maxSizeMB * alertPct / 100);
+  const cleanupInterval   = status.cleanupIntervalDays  || 7;
   const monitorEnabled  = process.env.PRX_DISK_MONITOR_ENABLED === 'Y';
   const kbProtected     = kbDir();
 
@@ -1461,8 +1463,9 @@ function renderDisk(status, diskLog, flash) {
   const chartPrevoyant = recent.map(e => e.prevoyantMB || 0);
   const chartDiskPct   = recent.map(e => e.diskUsedPct || 0);
 
-  const pctColor = diskUsedPct >= alertPct ? '#dc2626' : diskUsedPct >= alertPct * 0.85 ? '#ea580c' : '#16a34a';
-  const pctBg    = diskUsedPct >= alertPct ? '#fee2e2' : diskUsedPct >= alertPct * 0.85 ? '#fff7ed' : '#dcfce7';
+  const quotaUsedPct = maxSizeMB > 0 ? Math.min(Math.round((prevoyantMB / maxSizeMB) * 100), 100) : 0;
+  const quotaColor   = prevoyantMB >= alertThresholdMB ? '#dc2626' : quotaUsedPct >= alertPct * 0.85 ? '#ea580c' : '#6366f1';
+  const quotaBg      = prevoyantMB >= alertThresholdMB ? '#fee2e2' : quotaUsedPct >= alertPct * 0.85 ? '#fff7ed' : '#ede9fe';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -1550,19 +1553,19 @@ function renderDisk(status, diskLog, flash) {
     <!-- Stat cards -->
     <div class="stat-grid">
       <div class="stat-card">
-        <div class="stat-lbl">Overall Disk Used</div>
-        <div class="stat-val" style="color:${pctColor}">${diskUsedPct}%</div>
-        <div class="stat-sub">Alert threshold: ${alertPct}%</div>
+        <div class="stat-lbl">.prevoyant Size</div>
+        <div class="stat-val" style="color:${quotaColor}">${prevoyantMB.toFixed(1)} <span style="font-size:1rem;font-weight:500;color:#9ca3af">MB</span></div>
+        <div class="stat-sub">Quota: ${maxSizeMB} MB (${quotaUsedPct}% used)</div>
       </div>
       <div class="stat-card">
-        <div class="stat-lbl">.prevoyant Size</div>
-        <div class="stat-val">${prevoyantMB.toFixed(1)} <span style="font-size:1rem;font-weight:500;color:#9ca3af">MB</span></div>
-        <div class="stat-sub">${fmtBytes(status.prevoyantBytes || 0)}</div>
+        <div class="stat-lbl">Alert Threshold</div>
+        <div class="stat-val" style="color:${quotaColor};font-size:1.3rem">${alertThresholdMB.toFixed(0)} MB</div>
+        <div class="stat-sub">${alertPct}% of ${maxSizeMB} MB quota</div>
       </div>
       <div class="stat-card">
         <div class="stat-lbl">Free Disk Space</div>
         <div class="stat-val" style="font-size:1.3rem">${fmtBytes(diskFree)}</div>
-        <div class="stat-sub">Total: ${fmtBytes(diskTotal)}</div>
+        <div class="stat-sub">Disk used: ${diskUsedPct}% of ${fmtBytes(diskTotal)}</div>
       </div>
       <div class="stat-card">
         <div class="stat-lbl">Last Updated</div>
@@ -1571,17 +1574,17 @@ function renderDisk(status, diskLog, flash) {
       </div>
     </div>
 
-    <!-- Usage bar -->
+    <!-- Quota bar -->
     <div class="section">
-      <h2>Disk Capacity</h2>
+      <h2>.prevoyant Quota</h2>
       <div style="display:flex;justify-content:space-between;font-size:.8rem;color:#6b7280;margin-bottom:.3rem">
-        <span>Used: ${fmtBytes(diskTotal - diskFree)} of ${fmtBytes(diskTotal)}</span>
-        <span style="font-weight:700;color:${pctColor}">${diskUsedPct}%</span>
+        <span>${prevoyantMB.toFixed(1)} MB used of ${maxSizeMB} MB quota</span>
+        <span style="font-weight:700;color:${quotaColor}">${quotaUsedPct}%</span>
       </div>
       <div class="progress-bar">
-        <div class="progress-fill" style="width:${Math.min(diskUsedPct,100)}%;background:${pctColor}"></div>
+        <div class="progress-fill" style="width:${quotaUsedPct}%;background:${quotaColor}"></div>
       </div>
-      <div style="font-size:.75rem;color:#9ca3af;margin-top:.3rem">Alert fires at ${alertPct}% usage</div>
+      <div style="font-size:.75rem;color:#9ca3af;margin-top:.3rem">Alert fires when <code style="background:#f3f4f6;padding:1px 4px;border-radius:3px">~/.prevoyant/</code> reaches ${alertThresholdMB.toFixed(0)} MB (${alertPct}% of ${maxSizeMB} MB quota)</div>
     </div>
 
     <!-- Chart -->
@@ -1606,8 +1609,12 @@ function renderDisk(status, diskLog, flash) {
         <span class="detail-val">${process.env.PRX_DISK_MONITOR_INTERVAL_MINS || 60} minutes</span>
       </div>
       <div class="detail-row">
+        <span class="detail-key">Size quota</span>
+        <span class="detail-val">${maxSizeMB} MB</span>
+      </div>
+      <div class="detail-row">
         <span class="detail-key">Alert threshold</span>
-        <span class="detail-val">${alertPct}% disk used</span>
+        <span class="detail-val">${alertThresholdMB.toFixed(0)} MB (${alertPct}% of quota)</span>
       </div>
       <div class="detail-row">
         <span class="detail-key">Cleanup interval</span>
@@ -2300,7 +2307,7 @@ function renderSettings(vals, flash) {
       </details>
 
       <!-- Disk Monitor -->
-      <details id="disk-monitor" class="s-section"${sectionHasValues(['PRX_DISK_MONITOR_ENABLED','PRX_DISK_MONITOR_INTERVAL_MINS','PRX_DISK_CLEANUP_INTERVAL_DAYS','PRX_DISK_CAPACITY_ALERT_PCT'], vals) ? ' open' : ''}>
+      <details id="disk-monitor" class="s-section"${sectionHasValues(['PRX_DISK_MONITOR_ENABLED','PRX_DISK_MONITOR_INTERVAL_MINS','PRX_DISK_CLEANUP_INTERVAL_DAYS','PRX_PREVOYANT_MAX_SIZE_MB','PRX_DISK_CAPACITY_ALERT_PCT'], vals) ? ' open' : ''}>
         <summary>
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
           Disk Monitor
@@ -2311,8 +2318,8 @@ function renderSettings(vals, flash) {
           <div class="s-field">
             <div style="display:flex;align-items:flex-start;gap:.55rem;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:.65rem .9rem;font-size:.82rem;color:#1e40af;margin-bottom:.6rem">
               <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-              <span>Runs as an in-process background thread. Tracks disk space used by <code style="background:#dbeafe;padding:1px 4px;border-radius:3px">~/.prevoyant/</code> and overall disk capacity.
-              Sends an email alert when disk usage exceeds the configured threshold.
+              <span>Runs as an in-process background thread. Tracks the total size of <code style="background:#dbeafe;padding:1px 4px;border-radius:3px">~/.prevoyant/</code> against a configurable size quota.
+              Sends an email alert when the folder size exceeds that quota.
               When the cleanup interval elapses, a notification appears on the <a href="/dashboard/disk" style="color:#1e40af">Disk Monitor page</a> — you must click <em>Approve Cleanup</em> before any files are deleted.
               Cleanup removes session files older than 30 days and trims server logs.
               Changes take effect after <em>Save &amp; Restart</em>.</span>
@@ -2322,7 +2329,8 @@ function renderSettings(vals, flash) {
             ${fld('PRX_DISK_MONITOR_ENABLED','Enable disk monitor','select',v('PRX_DISK_MONITOR_ENABLED') || 'N','','Starts a background thread that tracks disk usage and alerts when capacity is low.',
               [{v:'N',l:'N — disabled (default)'},{v:'Y',l:'Y — enabled'}])}
             ${fld('PRX_DISK_MONITOR_INTERVAL_MINS','Check interval (minutes)','number',v('PRX_DISK_MONITOR_INTERVAL_MINS'),'60','How often to measure disk usage. Default: 60 (hourly).')}
-            ${fld('PRX_DISK_CAPACITY_ALERT_PCT','Alert threshold (% disk used)','number',v('PRX_DISK_CAPACITY_ALERT_PCT'),'80','Send an email alert when overall disk usage reaches this percentage. Default: 80.')}
+            ${fld('PRX_PREVOYANT_MAX_SIZE_MB','Size quota for ~/.prevoyant/ (MB)','number',v('PRX_PREVOYANT_MAX_SIZE_MB'),'500','Maximum allowed size of the ~/.prevoyant/ folder. The alert threshold is a percentage of this value. Default: 500 MB.')}
+            ${fld('PRX_DISK_CAPACITY_ALERT_PCT','Alert threshold (% of quota)','number',v('PRX_DISK_CAPACITY_ALERT_PCT'),'80','Send an email alert when ~/.prevoyant/ reaches this percentage of the size quota. E.g. 80% of 500 MB = alert at 400 MB. Default: 80.')}
             ${fld('PRX_DISK_CLEANUP_INTERVAL_DAYS','Cleanup interval (days)','number',v('PRX_DISK_CLEANUP_INTERVAL_DAYS'),'7','How many days between scheduled house-cleaning prompts. Set 0 to disable auto-cleanup prompts. Default: 7.')}
           </div>
         </div>
@@ -3264,7 +3272,7 @@ router.post('/settings', express.urlencoded({ extended: false }), (req, res) => 
     'PRX_INCLUDE_SM_IN_SESSIONS_ENABLED', 'PRX_SKILL_UPGRADE_MIN_SESSIONS',
     'PRX_SKILL_COMPACTION_INTERVAL', 'PRX_MONTHLY_BUDGET',
     'PRX_WATCHDOG_ENABLED', 'PRX_WATCHDOG_INTERVAL_SECS', 'PRX_WATCHDOG_FAIL_THRESHOLD',
-    'PRX_DISK_MONITOR_ENABLED', 'PRX_DISK_MONITOR_INTERVAL_MINS', 'PRX_DISK_CAPACITY_ALERT_PCT', 'PRX_DISK_CLEANUP_INTERVAL_DAYS',
+    'PRX_DISK_MONITOR_ENABLED', 'PRX_DISK_MONITOR_INTERVAL_MINS', 'PRX_PREVOYANT_MAX_SIZE_MB', 'PRX_DISK_CAPACITY_ALERT_PCT', 'PRX_DISK_CLEANUP_INTERVAL_DAYS',
   ];
 
   try {

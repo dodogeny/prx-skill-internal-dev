@@ -248,35 +248,35 @@ $PLUGIN_OK = $false
 if (cmd_exists 'claude') {
     info "Checking plugin status..."
     $pluginList = & claude plugin list 2>$null
-    if ($pluginList -match 'prevoyant-claude-plugin@dodogeny') {
-        ok "prevoyant-claude-plugin@dodogeny already installed"
-        & claude plugin enable prevoyant-claude-plugin@dodogeny 2>$null | Out-Null
+    if ($pluginList -match 'prevoyant@dodogeny') {
+        ok "prevoyant@dodogeny already installed"
+        & claude plugin enable prevoyant@dodogeny 2>$null | Out-Null
         $PLUGIN_OK = $true
     } else {
         info "Installing Prevoyant plugin..."
         try {
             & claude plugin marketplace update dodogeny 2>&1 | Select-Object -Last 3 | ForEach-Object { info $_ }
-            & claude plugin install prevoyant-claude-plugin@dodogeny 2>&1 | Select-Object -Last 5 | ForEach-Object { info $_ }
-            & claude plugin enable  prevoyant-claude-plugin@dodogeny 2>&1 | Select-Object -Last 3 | ForEach-Object { info $_ }
+            & claude plugin install prevoyant@dodogeny 2>&1 | Select-Object -Last 5 | ForEach-Object { info $_ }
+            & claude plugin enable  prevoyant@dodogeny 2>&1 | Select-Object -Last 3 | ForEach-Object { info $_ }
             $pluginList2 = & claude plugin list 2>$null
-            if ($pluginList2 -match 'prevoyant-claude-plugin@dodogeny') {
-                ok "prevoyant-claude-plugin@dodogeny installed and enabled"
+            if ($pluginList2 -match 'prevoyant@dodogeny') {
+                ok "prevoyant@dodogeny installed and enabled"
                 $PLUGIN_OK = $true
             } else {
                 warn "Plugin install did not complete — run manually after setup:"
-                info "  claude plugin install prevoyant-claude-plugin@dodogeny && claude plugin enable prevoyant-claude-plugin@dodogeny"
-                impact "Prevoyant /prevoyant-claude-plugin:dev skill unavailable until the plugin is installed and enabled"
+                info "  claude plugin install prevoyant@dodogeny && claude plugin enable prevoyant@dodogeny"
+                impact "Prevoyant /prevoyant:dev skill unavailable until the plugin is installed and enabled"
             }
         } catch {
             warn "Plugin install failed: $_ — run manually:"
-            info "  claude plugin install prevoyant-claude-plugin@dodogeny && claude plugin enable prevoyant-claude-plugin@dodogeny"
-            impact "Prevoyant /prevoyant-claude-plugin:dev skill unavailable until the plugin is installed and enabled"
+            info "  claude plugin install prevoyant@dodogeny && claude plugin enable prevoyant@dodogeny"
+            impact "Prevoyant /prevoyant:dev skill unavailable until the plugin is installed and enabled"
         }
     }
 } else {
     warn "claude CLI not found in PATH — plugin will not be auto-installed"
     impact "After Claude Code is installed, run:"
-    info "  claude plugin install prevoyant-claude-plugin@dodogeny && claude plugin enable prevoyant-claude-plugin@dodogeny"
+    info "  claude plugin install prevoyant@dodogeny && claude plugin enable prevoyant@dodogeny"
 }
 
 # ── summary ───────────────────────────────────────────────────────────────────
@@ -291,9 +291,9 @@ Write-Host "`nNext steps:"
 Write-Host "  1. Edit .env — set PRX_REPO_DIR, JIRA_URL, JIRA_USERNAME, JIRA_API_TOKEN"
 Write-Host "     Get your Jira API token: https://id.atlassian.com/manage-profile/security/api-tokens"
 if ($PLUGIN_OK) {
-    Write-Host "  2. Open Claude Code and try: /prevoyant-claude-plugin:dev PROJ-1234"
+    Write-Host "  2. Open Claude Code and try: /prevoyant:dev PROJ-1234"
 } else {
-    Write-Host "  2. Run: claude plugin install prevoyant-claude-plugin@dodogeny && claude plugin enable prevoyant-claude-plugin@dodogeny"
-    Write-Host "  3. Open Claude Code and try: /prevoyant-claude-plugin:dev PROJ-1234"
+    Write-Host "  2. Run: claude plugin install prevoyant@dodogeny && claude plugin enable prevoyant@dodogeny"
+    Write-Host "  3. Open Claude Code and try: /prevoyant:dev PROJ-1234"
 }
 Write-Host ""

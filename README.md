@@ -12,7 +12,7 @@
 
 Invoke the skill with a Jira ticket key and Claude runs a structured multi-step workflow — no manual searching, no copy-pasting ticket details, no guessing where to start.
 
-### Dev Mode — `/prevoyant-claude-plugin:dev PROJ-1234`
+### Dev Mode — `/prevoyant:dev PROJ-1234`
 
 1. **KB query** — pull the team's knowledge base; surface prior knowledge on the ticket's components
 2. **Ingest ticket** — fetch Jira fields, description, attachments, and all linked tickets
@@ -30,7 +30,7 @@ Invoke the skill with a Jira ticket key and Claude runs a structured multi-step 
 14. **Update KB** — write session record; push to shared repo if distributed
 15. **Bryan's retrospective** — Scrum Master audits token spend, flags process friction, proposes one SKILL.md improvement; unanimous team vote; pushes to main after `PRX_SKILL_UPGRADE_MIN_SESSIONS` sessions
 
-### PR Review Mode — `/prevoyant-claude-plugin:dev review PROJ-1234`
+### PR Review Mode — `/prevoyant:dev review PROJ-1234`
 
 1. **KB query** — pull the team's knowledge base; surface prior knowledge on the ticket's components
 2. **Read ticket** — fetch Jira fields and description
@@ -46,7 +46,7 @@ Invoke the skill with a Jira ticket key and Claude runs a structured multi-step 
 
 **Review verdict:** ✅ APPROVED / ⚠️ APPROVED WITH CONDITIONS / 🔄 REQUEST CHANGES / ❌ REJECT
 
-### Estimate Mode — `/prevoyant-claude-plugin:dev estimate PROJ-1234`
+### Estimate Mode — `/prevoyant:dev estimate PROJ-1234`
 
 Story points measure **effort** — not hours. Each vote scores three dimensions: **Complexity** (how hard), **Risk** (how uncertain), **Repetition** (how familiar). Scale: 1 · 2 · 3 · 5 · 8 · 13 · 20 · ? (spike needed).
 
@@ -119,9 +119,9 @@ Add to `~/.claude/settings.json` (or skip this — the setup script in Step 2 do
 Then install and enable:
 ```bash
 claude plugin marketplace update dodogeny
-claude plugin install prevoyant-claude-plugin@dodogeny
-claude plugin enable prevoyant-claude-plugin@dodogeny
-claude plugin list   # should show prevoyant-claude-plugin@dodogeny with ✔ enabled
+claude plugin install prevoyant@dodogeny
+claude plugin enable prevoyant@dodogeny
+claude plugin list   # should show prevoyant@dodogeny with ✔ enabled
 ```
 
 ---
@@ -172,20 +172,20 @@ If the MCP is configured correctly, Claude returns the issue details.
 
 **Dev Mode:**
 ```
-/prevoyant-claude-plugin:dev PROJ-1234
+/prevoyant:dev PROJ-1234
 ```
 
 **PR Review Mode:**
 ```
-/prevoyant-claude-plugin:dev review PROJ-1234
+/prevoyant:dev review PROJ-1234
 ```
 
 **Estimate Mode:**
 ```
-/prevoyant-claude-plugin:dev estimate PROJ-1234
+/prevoyant:dev estimate PROJ-1234
 ```
 
-> `/dev` is the shorthand (no namespace prefix). Use `/prevoyant-claude-plugin:dev` if another installed plugin also has a `dev` skill.
+> `/dev` is the shorthand (no namespace prefix). Use `/prevoyant:dev` if another installed plugin also has a `dev` skill.
 
 ---
 
@@ -686,7 +686,7 @@ git push origin main
 
 After pushing, update your local installation:
 ```bash
-claude plugin update prevoyant-claude-plugin@dodogeny
+claude plugin update prevoyant@dodogeny
 ```
 
 > Do **not** run `git pull` directly inside `~/.claude/plugins/marketplaces/dodogeny` — Claude Code manages that directory.
@@ -698,10 +698,10 @@ claude plugin update prevoyant-claude-plugin@dodogeny
 ```bash
 # If registered with a local path:
 git -C ~/.claude/plugins/marketplaces/dodogeny pull
-claude plugin update prevoyant-claude-plugin@dodogeny
+claude plugin update prevoyant@dodogeny
 
 # If registered with the hosted Git URL:
-claude plugin update prevoyant-claude-plugin@dodogeny
+claude plugin update prevoyant@dodogeny
 
 # Verify:
 claude plugin list
@@ -764,8 +764,8 @@ tar -xzf ~/prevoyant-kb-backup-YYYYMMDD.tar.gz -C ~/.prevoyant/
 ### 1. Disable and remove the plugin
 
 ```bash
-claude plugin disable prevoyant-claude-plugin@dodogeny
-claude plugin uninstall prevoyant-claude-plugin@dodogeny
+claude plugin disable prevoyant@dodogeny
+claude plugin uninstall prevoyant@dodogeny
 ```
 
 ### 2. Remove the marketplace registration
@@ -861,7 +861,7 @@ rm -rf ~/.prevoyant/reports   # or the path set in CLAUDE_REPORT_DIR
 
 ### v1.2.2 — Token Budget Tracking + Estimate Mode
 
-- **Estimate Mode:** New third mode (`/prevoyant-claude-plugin:dev estimate PROJ-1234`) where the Engineering Panel runs Planning Poker using the Asana story points methodology — effort measured as **Complexity + Risk + Repetition**, not hours, on a modified Fibonacci scale (1·2·3·5·8·13·20·?). Before voting, each engineer loads the KB (`core-mental-map/`, `patterns.md`, `gotchas.md`, past ticket estimates, lessons learned) so votes are grounded in acquired system knowledge, not gut feel. All five engineers vote simultaneously, then debate is structured by dimension (which of the three factors is causing disagreement?) rather than just "your number is too high." Up to 3 rounds; Morgan makes a binding final call if still split. Confidence level (High/Medium/Low) reflects how many rounds were needed. Agreed points are recorded in the KB as `[ESTIMATE-PATTERN]` entries for future sessions.
+- **Estimate Mode:** New third mode (`/prevoyant:dev estimate PROJ-1234`) where the Engineering Panel runs Planning Poker using the Asana story points methodology — effort measured as **Complexity + Risk + Repetition**, not hours, on a modified Fibonacci scale (1·2·3·5·8·13·20·?). Before voting, each engineer loads the KB (`core-mental-map/`, `patterns.md`, `gotchas.md`, past ticket estimates, lessons learned) so votes are grounded in acquired system knowledge, not gut feel. All five engineers vote simultaneously, then debate is structured by dimension (which of the three factors is causing disagreement?) rather than just "your number is too high." Up to 3 rounds; Morgan makes a binding final call if still split. Confidence level (High/Medium/Low) reflects how many rounds were needed. Agreed points are recorded in the KB as `[ESTIMATE-PATTERN]` entries for future sessions.
 - **ccusage integration:** Actual Claude token spend is now measured using [ccusage](https://www.npmjs.com/package/ccusage), which reads Claude Code's local JSONL files offline — no network call, no auth required. ccusage is downloaded automatically via `npx --yes` on first use; Node.js is installed automatically if not present (Homebrew → nvm on macOS, apt/dnf → nvm on Linux).
 - **SessionStart budget check:** `scripts/check-budget.sh` runs at every session start. It captures a daily-spend baseline to `/tmp/.prx-session-start-spend` (used by Step 11 for per-session delta) and injects the current month's actual spend and budget status into Claude's session context. A system-level warning is surfaced when spend ≥ 80%.
 - **Step 11 / R7 / E7 — actual costs:** Instead of estimating tokens from content volume, Claude now runs `npx ccusage@latest daily --json` and subtracts the session-start baseline to report the exact cost of the current session. Manual estimation is retained as a fallback when Node.js is unavailable.
@@ -878,7 +878,7 @@ rm -rf ~/.prevoyant/reports   # or the path set in CLAUDE_REPORT_DIR
 - **Distributed KB — first contributor:** Added checks to ensure `PRX_KB_KEY` is set when required (encrypted repos) and that the first-time contributor flow handles an existing remote branch gracefully.
 - **Email reports:** `send-report.py` delivers PDF/HTML analysis and review reports via SMTP immediately after saving. Configure via `PRX_EMAIL_TO` and `PRX_SMTP_*` env vars.
 - **PR Review diff:** Review mode (Step R4) now uses `git diff` to detect changed files precisely, restricting the review panel to only the files actually modified on the feature branch.
-- **Plugin registry:** Published as `prevoyant-claude-plugin@dodogeny`.
+- **Plugin registry:** Published as `prevoyant@dodogeny`.
 - **Token efficiency:** Engineering Panel complexity gate (Step 7b-pre) fast-paths simple fixes; context pruned before Step 9; Riley made conditional on engineer divergence; KB integrity sweep at session start.
 - **Polling script:** `--force TICKET-KEY` re-queues a previously seen ticket; `PRX_JIRA_PROJECT` scopes JQL to a single project.
 - **Configurability:** `PRX_REPORT_VERBOSITY` (full/compact/minimal) controls terminal output without affecting PDF content; `PRX_ATTACHMENT_MAX_MB` caps non-image attachment size (default: unlimited).

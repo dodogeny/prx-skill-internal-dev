@@ -82,94 +82,11 @@ function fmtBytes(bytes) {
 }
 
 // ── Claude budget helper ──────────────────────────────────────────────────────
-// Two sources of truth:
-//   1. Anthropic Cost Report API (PRX_ANTHROPIC_ADMIN_KEY set) — actual billed USD
-//   2. ccusage monthly (fallback) — calculated from token counts × public pricing
-// Token breakdown always comes from ccusage (local, fast).
-
-const https = require('https');
+// Cost is calculated from local token counts via ccusage (labelled "ccusage calc'd").
 
 let _budgetCache    = null;
 let _budgetCachedAt = 0;
 const BUDGET_CACHE_MS = 120 * 1000;
-
-// Fetch actual billed cost for the current calendar month via Anthropic Cost Report API.
-function fetchAnthropicCostReport(adminKey) {
-  const now   = new Date();
-  const start = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01T00:00:00Z`;
-  // ending_at = start of tomorrow so today's bucket is included
-  const tomorrow = new Date(now);
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-  const end = `${tomorrow.getUTCFullYear()}-${String(tomorrow.getUTCMonth() + 1).padStart(2, '0')}-${String(tomorrow.getUTCDate()).padStart(2, '0')}T00:00:00Z`;
-
-  return new Promise((resolve, reject) => {
-    const params = `starting_at=${encodeURIComponent(start)}&ending_at=${encodeURIComponent(end)}&bucket_width=1d`;
-    const options = {
-      hostname: 'api.anthropic.com',
-      path:     `/v1/organizations/cost_report?${params}`,
-      method:   'GET',
-      headers:  { 'x-api-key': adminKey, 'anthropic-version': '2023-06-01' },
-      timeout:  15000,
-    };
-    const req = https.request(options, res => {
-      let raw = '';
-      res.on('data', c => raw += c);
-      res.on('end', () => {
-        try {
-          const json = JSON.parse(raw);
-          if (res.statusCode !== 200) {
-            return reject(new Error(`Anthropic API ${res.statusCode}: ${json.error?.message || raw.slice(0, 120)}`));
-          }
-
-          // The API may wrap buckets in a { data: [...] } envelope or return a
-          // single bucket object directly. Normalise to an array either way.
-          const buckets = Array.isArray(json.data) ? json.data
-                        : Array.isArray(json)       ? json
-                        : [json];
-
-          // Log a summary so we can verify shape and coverage.
-          const withResults = buckets.filter(b => (b.results || []).length > 0);
-          console.log(`[budget] Cost Report API: ${buckets.length} bucket(s), ${withResults.length} with results`);
-          if (withResults.length > 0) {
-            console.log('[budget] Cost Report first non-empty bucket sample:', JSON.stringify(withResults[0]).slice(0, 400));
-          } else {
-            console.log('[budget] Cost Report first bucket sample:', JSON.stringify(buckets[0]).slice(0, 400));
-          }
-
-          // Extract USD from a result entry. Handles:
-          //   { amount: 295 }               → integer cents → ÷ 100
-          //   { amount: 2.95 }              → float USD     → use directly
-          //   { amount: { value, currency }} → nested cents  → value ÷ 100
-          function extractUSD(r) {
-            const val = r.amount ?? r.cost ?? r.total_cost ?? 0;
-            if (typeof val === 'object' && val !== null) {
-              return parseFloat(val.value ?? 0) / 100;
-            }
-            const n = parseFloat(val) || 0;
-            // Whole numbers or values ≥ 1 are assumed to be cents.
-            return (Number.isInteger(n) || n >= 1) ? n / 100 : n;
-          }
-
-          let totalUSD = 0;
-          for (const bucket of buckets) {
-            for (const r of (bucket.results || [])) {
-              totalUSD += extractUSD(r);
-            }
-          }
-
-          if (totalUSD === 0) {
-            console.warn('[budget] Cost Report API summed to $0 — see bucket sample above');
-          }
-
-          resolve(totalUSD);
-        } catch (e) { reject(e); }
-      });
-    });
-    req.on('error',   reject);
-    req.on('timeout', () => { req.destroy(); reject(new Error('Anthropic API timeout')); });
-    req.end();
-  });
-}
 
 // Fetch token breakdown from local ccusage (no network, reads JSONL files).
 function fetchCcusageMonthly() {
@@ -204,27 +121,11 @@ function getBudgetStatus() {
     return Promise.resolve(_budgetCache);
   }
 
-  const adminKey = process.env.PRX_ANTHROPIC_ADMIN_KEY || '';
-  const budget   = parseFloat(process.env.PRX_MONTHLY_BUDGET || '0') || null;
+  const budget    = parseFloat(process.env.PRX_MONTHLY_BUDGET || '0') || null;
   const thisMonth = new Date().toISOString().slice(0, 7);
 
-  // Always fetch ccusage token breakdown (local, fast)
-  const ccPromise = fetchCcusageMonthly();
-
-  // Actual cost: Anthropic API if admin key configured, else ccusage totalCost
-  const costPromise = adminKey
-    ? fetchAnthropicCostReport(adminKey).catch(err => {
-        console.error('[budget] Anthropic Cost Report API error:', err.message);
-        return null; // fall through to ccusage
-      })
-    : Promise.resolve(null);
-
-  return Promise.all([costPromise, ccPromise]).then(([apiCost, ccEntry]) => {
-    if (adminKey && apiCost === null) {
-      console.warn('[budget] Anthropic Cost Report API returned no data — ccusage fallback in use');
-    }
-
-    const available = apiCost != null || ccEntry != null;
+  return fetchCcusageMonthly().then(ccEntry => {
+    const available = ccEntry != null;
     if (!available) {
       const fallback = { available: false, spent: null, budget, remaining: null, pct: null, month: thisMonth, source: 'unavailable', tokens: null };
       _budgetCache    = fallback;
@@ -232,11 +133,8 @@ function getBudgetStatus() {
       return fallback;
     }
 
-    const spent = apiCost != null
-      ? apiCost
-      : parseFloat(ccEntry?.totalCost ?? 0);
-
-    const source = apiCost != null ? 'anthropic-api' : 'ccusage-calculated';
+    const spent     = parseFloat(ccEntry?.totalCost ?? 0);
+    const source    = 'ccusage-calculated';
     const remaining = budget != null ? Math.max(0, budget - spent) : null;
     const pct       = budget ? Math.min(100, Math.round((spent / budget) * 100)) : null;
     const month     = ccEntry?.month || thisMonth;
@@ -818,9 +716,9 @@ function renderDashboard(stats, budget) {
         ${b.available
           ? (b.budget
               ? `<span class="info-val" style="color:${budgetPctColor}">$${(b.remaining||0).toFixed(2)} left</span>
-                 <span style="font-size:.7rem;color:#b0b7c3">$${(b.spent||0).toFixed(2)} / $${b.budget.toFixed(2)} &middot; ${b.source === 'anthropic-api' ? '🟢 API' : '⚪ calc'}</span>`
+                 <span style="font-size:.7rem;color:#b0b7c3">$${(b.spent||0).toFixed(2)} / $${b.budget.toFixed(2)} &middot; ⚪ calc</span>`
               : `<span class="info-val">$${(b.spent||0).toFixed(2)} spent</span>
-                 <span style="font-size:.7rem;color:#b0b7c3">${b.source === 'anthropic-api' ? '🟢 Anthropic API' : '⚪ ccusage calc\'d'}</span>`)
+                 <span style="font-size:.7rem;color:#b0b7c3">⚪ ccusage calc'd</span>`)
           : `<span class="info-val muted">unavailable</span>`}
       </div>
     </div>
@@ -840,9 +738,7 @@ function renderDashboard(stats, budget) {
         <div>
           <div style="display:flex;align-items:center;gap:.4rem">
             <div class="lbl" style="color:${budgetPctColor};opacity:.8">Claude Budget &mdash; ${monthLabel}</div>
-            ${b.source === 'anthropic-api'
-              ? `<span style="font-size:.62rem;font-weight:700;padding:1px 5px;border-radius:4px;background:#dcfce7;color:#166534;white-space:nowrap">Anthropic API</span>`
-              : `<span style="font-size:.62rem;font-weight:700;padding:1px 5px;border-radius:4px;background:#f3f4f6;color:#6b7280;white-space:nowrap" title="Calculated from token counts × pricing — may differ from actual billing">ccusage calc'd</span>`}
+            <span style="font-size:.62rem;font-weight:700;padding:1px 5px;border-radius:4px;background:#f3f4f6;color:#6b7280;white-space:nowrap" title="Calculated from token counts × pricing — may differ from actual billing">ccusage calc'd</span>
           </div>
           <div style="font-size:1.55rem;font-weight:700;color:${budgetPctColor};line-height:1.1;margin-top:3px">
             ${b.budget
@@ -866,9 +762,6 @@ function renderDashboard(stats, budget) {
         <span style="font-size:.7rem;color:${budgetPctColor};opacity:.75" title="Cache read tokens">${fmtTokensK(b.tokens.cacheRead)} cached</span>
         <span style="font-size:.7rem;color:${budgetPctColor};opacity:.75" title="Cache creation tokens">${fmtTokensK(b.tokens.cacheCreation)} cache-write</span>
         <span style="font-size:.7rem;color:${budgetPctColor};opacity:.75" title="Output tokens">${fmtTokensK(b.tokens.output)} out</span>
-        ${b.source === 'anthropic-api' && b.tokens.calculated
-          ? `<span style="font-size:.7rem;color:${budgetPctColor};opacity:.6" title="ccusage calculated cost for comparison">ccusage: $${b.tokens.calculated.toFixed(2)}</span>`
-          : ''}
       </div>` : ''}
     </div>` : ''}
   </div>
@@ -2189,30 +2082,6 @@ function renderSettings(vals, flash) {
         </div>
       </details>
 
-      <!-- Anthropic Admin Key (budget tracker) -->
-      <details class="s-section"${sectionHasValues(['PRX_ANTHROPIC_ADMIN_KEY'], vals) ? ' open' : ''}>
-        <summary>
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-          Claude Budget (Admin Key)
-          <span class="s-opt">Optional</span>
-          <span class="s-chevron">›</span>
-        </summary>
-        <div class="s-body full-width">
-          <div class="s-field">
-            <div style="display:flex;align-items:flex-start;gap:.55rem;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:.65rem .9rem;font-size:.82rem;color:#1e40af;margin-bottom:.6rem">
-              <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-              <span>An <strong>Admin API key</strong> (not a regular API key) is required to fetch your actual billed cost from the Anthropic Cost Report API.
-              Generate one at <a href="https://platform.claude.com/settings/admin-keys" target="_blank" style="color:#1e40af">platform.claude.com/settings/admin-keys</a> — requires organisation admin role.
-              Without this key the budget card falls back to <strong>ccusage (calculated)</strong>, which estimates cost from token counts and may differ from your actual bill.
-              Changes take effect immediately (no restart needed).</span>
-            </div>
-          </div>
-          <div class="s-body" style="padding:0;box-shadow:none;background:transparent">
-            ${fld('PRX_ANTHROPIC_ADMIN_KEY','Anthropic Admin API Key','password',v('PRX_ANTHROPIC_ADMIN_KEY'),'sk-ant-admin01-...','Used only for the dashboard budget tracker. Never sent anywhere except api.anthropic.com.')}
-          </div>
-        </div>
-      </details>
-
       <!-- Email Delivery -->
       <details class="s-section"${sectionHasValues(emailKeys, vals) ? ' open' : ''}>
         <summary>
@@ -3305,7 +3174,6 @@ router.post('/settings', express.urlencoded({ extended: false }), (req, res) => 
     'AUTO_MODE', 'FORCE_FULL_RUN', 'PRX_REPORT_VERBOSITY',
     'PRX_JIRA_PROJECT', 'PRX_ATTACHMENT_MAX_MB',
     'PRX_RETRY_MAX', 'PRX_RETRY_BACKOFF',
-    'PRX_ANTHROPIC_ADMIN_KEY',
     'PRX_EMAIL_TO', 'PRX_SMTP_HOST', 'PRX_SMTP_PORT', 'PRX_SMTP_USER', 'PRX_SMTP_PASS',
     'PRX_NOTIFY_ENABLED', 'PRX_NOTIFY_LEVEL', 'PRX_NOTIFY_MUTE_DAYS', 'PRX_NOTIFY_EVENTS',
     'PRX_INCLUDE_SM_IN_SESSIONS_ENABLED', 'PRX_SKILL_UPGRADE_MIN_SESSIONS',

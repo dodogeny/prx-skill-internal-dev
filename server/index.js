@@ -8,7 +8,8 @@ const jiraWebhook = require('./webhooks/jira');
 const dashboardRoutes = require('./dashboard/routes');
 const { schedulePollScript, runFallbackPoll } = require('./runner/pollScheduler');
 const { restoreScheduledJobs } = require('./queue/jobQueue');
-const activityLog = require('./dashboard/activityLog');
+const activityLog   = require('./dashboard/activityLog');
+const serverEvents  = require('./serverEvents');
 
 const app = express();
 app.use(express.json());
@@ -112,6 +113,18 @@ function stopDiskMonitor() {
 
 process.on('SIGTERM', () => { stopWatchdog(); stopDiskMonitor(); setTimeout(() => process.exit(0), 600); });
 process.on('SIGINT',  () => { stopWatchdog(); stopDiskMonitor(); setTimeout(() => process.exit(0), 600); });
+
+// Reactively start/stop workers when settings are saved from the dashboard.
+// This avoids requiring a full server restart for monitor enable/disable toggles.
+serverEvents.on('settings-saved', () => {
+  const diskEnabled     = process.env.PRX_DISK_MONITOR_ENABLED === 'Y';
+  const watchdogEnabled = process.env.PRX_WATCHDOG_ENABLED     === 'Y';
+
+  if (diskEnabled && !diskWorker)         startDiskMonitor();
+  if (!diskEnabled && diskWorker)         stopDiskMonitor();
+  if (watchdogEnabled && !watchdogWorker) startWatchdog();
+  if (!watchdogEnabled && watchdogWorker) stopWatchdog();
+});
 
 // ── Server listen ─────────────────────────────────────────────────────────────
 

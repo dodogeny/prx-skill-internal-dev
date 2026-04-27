@@ -9,6 +9,7 @@ const { getStats, getTicket, reRunTicket, recordScheduled, deleteTicket } = requ
 const { killJob, enqueue, scheduleJob, prioritizeJob } = require('../queue/jobQueue');
 const activityLog = require('./activityLog');
 const { getPollStatus } = require('../runner/pollScheduler');
+const serverEvents = require('../serverEvents');
 
 const VALID_MODES = new Set(['dev', 'review', 'estimate']);
 
@@ -99,7 +100,7 @@ function fetchAnthropicCostReport(adminKey) {
   const start = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01T00:00:00Z`;
 
   return new Promise((resolve, reject) => {
-    const params = `starting_at=${encodeURIComponent(start)}&bucket_width=1d`;
+    const params = `starting_at=${encodeURIComponent(start)}&bucket_width=day`;
     const options = {
       hostname: 'api.anthropic.com',
       path:     `/v1/organizations/cost_report?${params}`,
@@ -181,6 +182,9 @@ function getBudgetStatus() {
     : Promise.resolve(null);
 
   return Promise.all([costPromise, ccPromise]).then(([apiCost, ccEntry]) => {
+    if (adminKey && apiCost === null) {
+      console.warn('[budget] Anthropic Cost Report API returned no data — ccusage fallback in use');
+    }
     const available = apiCost != null || ccEntry != null;
     if (!available) {
       const fallback = { available: false, spent: null, budget, remaining: null, pct: null, month: thisMonth, source: 'unavailable', tokens: null };
@@ -1392,6 +1396,9 @@ function writeEnvValues(updates) {
     .filter(([k, v]) => !applied.has(k) && v !== '')
     .map(([k, v]) => `${k}=${v}`);
   fs.writeFileSync(ENV_PATH, updated.join('\n') + (extra.length ? '\n' + extra.join('\n') : ''), 'utf8');
+
+  // Keep process.env in sync so in-process reads see the new values immediately.
+  for (const [k, v] of Object.entries(updates)) process.env[k] = v;
 }
 
 // ── KB helpers ────────────────────────────────────────────────────────────────
@@ -3283,6 +3290,9 @@ router.post('/settings', express.urlencoded({ extended: false }), (req, res) => 
     activityLog.record('settings_saved', null, 'user', {
       fields: Object.keys(updates).filter(k => updates[k] !== '').join(','),
     });
+    // Notify index.js to reactively start/stop workers (disk monitor, watchdog)
+    // without requiring a full server restart.
+    serverEvents.emit('settings-saved', updates);
   } catch (err) {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.send(renderSettings(readEnvValues(), 'error'));

@@ -14,11 +14,12 @@ $PROJECT_ROOT = Split-Path -Parent $SCRIPT_DIR
 $ERRORS = 0
 
 # ── helpers ───────────────────────────────────────────────────────────────────
-function ok   { param($m) Write-Host "  OK   $m" -ForegroundColor Green }
-function warn { param($m) Write-Host "  WARN $m" -ForegroundColor Yellow }
-function err  { param($m) Write-Host "  ERR  $m" -ForegroundColor Red; $script:ERRORS++ }
-function step { param($m) Write-Host "`n-- $m" -ForegroundColor Cyan }
-function info { param($m) Write-Host "       $m" }
+function ok     { param($m) Write-Host "  OK   $m" -ForegroundColor Green }
+function warn   { param($m) Write-Host "  WARN $m" -ForegroundColor Yellow }
+function err    { param($m) Write-Host "  ERR  $m" -ForegroundColor Red; $script:ERRORS++ }
+function step   { param($m) Write-Host "`n-- $m" -ForegroundColor Cyan }
+function info   { param($m) Write-Host "       $m" }
+function impact { param($m) Write-Host "       Impact: $m" -ForegroundColor Yellow }
 
 function cmd_exists { param($c) return [bool](Get-Command $c -ErrorAction SilentlyContinue) }
 
@@ -35,7 +36,7 @@ Write-Host "Repo     : $PROJECT_ROOT"
 Write-Host "======================================"
 
 # ── 1. uvx (Jira MCP) ─────────────────────────────────────────────────────────
-step "1/6  uvx  (Jira MCP server)"
+step "1/7  uvx  (Jira MCP server)  [required]"
 
 if (cmd_exists 'uvx') {
     ok "uvx already installed"
@@ -49,15 +50,17 @@ if (cmd_exists 'uvx') {
             info "Add to your profile: `$env:PATH += `";`$env:USERPROFILE\.local\bin`""
         } else {
             err "uvx installed but not found in PATH — restart PowerShell or open a new terminal"
+            impact "Jira MCP server may not start until PATH is updated"
         }
     } catch {
         err "uvx installation failed: $_"
+        impact "Jira MCP server disabled — ticket fetching and Jira integration will not work"
         info "Install manually: https://docs.astral.sh/uv/getting-started/installation/"
     }
 }
 
 # ── 2. Node.js (ccusage) ──────────────────────────────────────────────────────
-step "2/6  Node.js  (ccusage budget tracking)"
+step "2/7  Node.js  (budget tracking + Prevoyant Server)  [required]"
 
 if (cmd_exists 'node') {
     ok "Node.js already installed ($(node --version 2>$null))"
@@ -97,12 +100,12 @@ if (cmd_exists 'node') {
         ok "Node.js installed ($(node --version 2>$null))"
     } else {
         err "Node.js installation failed. Install from https://nodejs.org then re-run setup."
-        info "Budget tracking will be skipped until Node.js is available."
+        impact "Token budget tracking and Prevoyant Server unavailable until Node.js is installed"
     }
 }
 
 # ── 3. pandoc (PDF generation) ────────────────────────────────────────────────
-step "3/6  pandoc  (PDF reports — optional, Chrome/HTML fallback available)"
+step "3/7  pandoc  (PDF reports)  [optional — Chrome headless or HTML fallback]"
 
 if (cmd_exists 'pandoc') {
     ok "pandoc already installed ($(pandoc --version 2>$null | Select-Object -First 1))"
@@ -142,19 +145,21 @@ if (cmd_exists 'pandoc') {
         ok "pandoc installed"
     } else {
         warn "pandoc not installed — PDF reports will fall back to Chrome headless or HTML."
+        impact "Reports still generated — quality may be lower without pandoc"
         info "Install manually: winget install JohnMacFarlane.Pandoc"
         info "Or download from: https://pandoc.org/installing.html"
     }
 }
 
 # ── 4. .env ───────────────────────────────────────────────────────────────────
-step "4/6  .env  (environment file)"
+step "4/7  .env  (environment file)  [required]"
 
 $EnvFile    = Join-Path $PROJECT_ROOT ".env"
 $EnvExample = Join-Path $PROJECT_ROOT ".env.example"
 
 if (Test-Path $EnvFile) {
-    ok ".env already exists — skipping"
+    Copy-Item $EnvFile "$EnvFile.bak" -Force
+    ok ".env already exists — skipping (backed up to .env.bak)"
 } else {
     if (Test-Path $EnvExample) {
         Copy-Item $EnvExample $EnvFile
@@ -162,11 +167,12 @@ if (Test-Path $EnvFile) {
         warn "Edit .env: set PRX_REPO_DIR, JIRA_URL, JIRA_USERNAME, JIRA_API_TOKEN"
     } else {
         err ".env.example not found — create .env manually (see README)"
+        impact "Plugin cannot load credentials — Jira and email features disabled"
     }
 }
 
 # ── 5. Claude Code settings.json (marketplace registration) ───────────────────
-step "5/6  Claude Code marketplace registration"
+step "5/7  Claude Code marketplace registration  [required]"
 
 $SettingsFile = Join-Path $env:USERPROFILE ".claude\settings.json"
 $SettingsDir  = Split-Path -Parent $SettingsFile
@@ -200,6 +206,7 @@ try {
     ok "~/.claude/settings.json updated"
 } catch {
     err "Could not update settings.json: $_"
+    impact "Prevoyant plugin will not load in Claude Code until the marketplace is registered"
     info "Add the marketplace manually (see README)"
 }
 
@@ -207,7 +214,7 @@ try {
 # SessionStart hooks (load-env + check-budget) live in the committed
 # .claude/settings.json and work without this file.  This file only adds
 # pre-approved permissions so common commands don't trigger prompts.
-step "6/6  settings.local.json  (permission allowlist)"
+step "6/7  settings.local.json  (permission allowlist)  [optional]"
 
 $LocalSettings = Join-Path $PROJECT_ROOT ".claude\settings.local.json"
 $LocalDir = Split-Path -Parent $LocalSettings
@@ -234,6 +241,43 @@ if (Test-Path $LocalSettings) {
     }
 }
 
+# ── 7. Plugin install + enable ────────────────────────────────────────────────
+step "7/7  plugin install + enable  [required]"
+
+$PLUGIN_OK = $false
+if (cmd_exists 'claude') {
+    info "Checking plugin status..."
+    $pluginList = & claude plugin list 2>$null
+    if ($pluginList -match 'prx@dodogeny') {
+        ok "prx@dodogeny already installed"
+        & claude plugin enable prx@dodogeny 2>$null | Out-Null
+        $PLUGIN_OK = $true
+    } else {
+        info "Installing Prevoyant plugin..."
+        try {
+            & claude plugin install prx@dodogeny 2>&1 | Select-Object -Last 5 | ForEach-Object { info $_ }
+            & claude plugin enable  prx@dodogeny 2>&1 | Select-Object -Last 3 | ForEach-Object { info $_ }
+            $pluginList2 = & claude plugin list 2>$null
+            if ($pluginList2 -match 'prx@dodogeny') {
+                ok "prx@dodogeny installed and enabled"
+                $PLUGIN_OK = $true
+            } else {
+                warn "Plugin install did not complete — run manually after setup:"
+                info "  claude plugin install prx@dodogeny && claude plugin enable prx@dodogeny"
+                impact "Prevoyant /prx:dev skill unavailable until the plugin is installed and enabled"
+            }
+        } catch {
+            warn "Plugin install failed: $_ — run manually:"
+            info "  claude plugin install prx@dodogeny && claude plugin enable prx@dodogeny"
+            impact "Prevoyant /prx:dev skill unavailable until the plugin is installed and enabled"
+        }
+    }
+} else {
+    warn "claude CLI not found in PATH — plugin will not be auto-installed"
+    impact "After Claude Code is installed, run:"
+    info "  claude plugin install prx@dodogeny && claude plugin enable prx@dodogeny"
+}
+
 # ── summary ───────────────────────────────────────────────────────────────────
 Write-Host "`n======================================"
 if ($ERRORS -eq 0) {
@@ -245,6 +289,10 @@ if ($ERRORS -eq 0) {
 Write-Host "`nNext steps:"
 Write-Host "  1. Edit .env — set PRX_REPO_DIR, JIRA_URL, JIRA_USERNAME, JIRA_API_TOKEN"
 Write-Host "     Get your Jira API token: https://id.atlassian.com/manage-profile/security/api-tokens"
-Write-Host "  2. Run: claude plugin install prx@dodogeny && claude plugin enable prx@dodogeny"
-Write-Host "  3. Open Claude Code and try: /prx:dev PROJ-1234"
+if ($PLUGIN_OK) {
+    Write-Host "  2. Open Claude Code and try: /prx:dev PROJ-1234"
+} else {
+    Write-Host "  2. Run: claude plugin install prx@dodogeny && claude plugin enable prx@dodogeny"
+    Write-Host "  3. Open Claude Code and try: /prx:dev PROJ-1234"
+}
 Write-Host ""

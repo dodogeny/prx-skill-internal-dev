@@ -38,11 +38,12 @@ fi
 
 # ── colours ───────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; BOLD='\033[1m'; NC='\033[0m'
-ok()   { printf "${GREEN}  ✅  %s${NC}\n"  "$*"; }
-warn() { printf "${YELLOW}  ⚠️   %s${NC}\n" "$*"; }
-err()  { printf "${RED}  ❌  %s${NC}\n"    "$*"; ERRORS=$((ERRORS + 1)); }
-step() { printf "\n${BOLD}── %s${NC}\n"    "$*"; }
-info() { printf "       %s\n"              "$*"; }
+ok()     { printf "${GREEN}  ✅  %s${NC}\n"       "$*"; }
+warn()   { printf "${YELLOW}  ⚠️   %s${NC}\n"    "$*"; }
+err()    { printf "${RED}  ❌  %s${NC}\n"       "$*"; ERRORS=$((ERRORS + 1)); }
+step()   { printf "\n${BOLD}── %s${NC}\n"       "$*"; }
+info()   { printf "       %s\n"                 "$*"; }
+impact() { printf "       ${YELLOW}Impact: %s${NC}\n" "$*"; }
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -200,7 +201,7 @@ printf "════════════════════════
 
 # ── 1. uvx (Jira MCP) ─────────────────────────────────────────────────────────
 
-step "1/6  uvx  (Jira MCP server)"
+step "1/7  uvx  (Jira MCP server)  [required]"
 
 if command -v uvx &>/dev/null; then
   ok "uvx already installed"
@@ -212,6 +213,7 @@ else
     wget -qO- https://astral.sh/uv/install.sh | sh 2>&1 | tail -5
   else
     err "Cannot install uvx: curl and wget not found."
+    impact "Jira MCP server disabled — ticket fetching and Jira integration will not work"
     info "Install manually: https://docs.astral.sh/uv/getting-started/installation/"
   fi
   export PATH="$HOME/.local/bin:$PATH"
@@ -219,13 +221,14 @@ else
     ok "uvx installed"
     info "Add to your shell profile: export PATH=\"\$HOME/.local/bin:\$PATH\""
   else
-    err "uvx installed but not in current PATH — restart shell or add \$HOME/.local/bin to PATH"
+    err "uvx installed but not found in PATH — restart shell or add \$HOME/.local/bin to PATH"
+    impact "Jira MCP server may not start until PATH is updated"
   fi
 fi
 
 # ── 2. Node.js (ccusage) ──────────────────────────────────────────────────────
 
-step "2/6  Node.js  (ccusage budget tracking)"
+step "2/7  Node.js  (budget tracking + Prevoyant Server)  [required]"
 
 if locate_npx &>/dev/null; then
   ok "Node.js already installed ($(node --version 2>/dev/null || echo 'found'))"
@@ -270,13 +273,13 @@ else
     ok "Node.js installed ($(node --version 2>/dev/null || echo 'found'))"
   else
     err "Node.js installation failed. Install from https://nodejs.org then re-run setup."
-    info "Budget tracking will be skipped until Node.js is available."
+    impact "Token budget tracking and Prevoyant Server unavailable until Node.js is installed"
   fi
 fi
 
 # ── 3. pandoc (PDF generation) ────────────────────────────────────────────────
 
-step "3/6  pandoc  (PDF reports — optional, Chrome/HTML fallback available)"
+step "3/7  pandoc  (PDF reports)  [optional — Chrome headless or HTML fallback]"
 
 if command -v pandoc &>/dev/null; then
   ok "pandoc already installed ($(pandoc --version 2>/dev/null | head -1 || echo 'found'))"
@@ -301,12 +304,14 @@ else
     ok "pandoc installed"
   else
     warn "pandoc not installed — PDF reports will fall back to Chrome headless or HTML."
+    impact "Reports still generated — quality may be lower without pandoc"
     if [ "$IS_WIN_BASH" -eq 1 ]; then
       info "Install manually: winget install JohnMacFarlane.Pandoc"
     elif [ "$OS_RAW" = "Darwin" ]; then
       info "Install manually: brew install pandoc"
     else
-      info "Install manually: apt install pandoc (Debian/Ubuntu) | dnf install pandoc (Fedora)"
+      info "Install manually: apt install pandoc  (Debian/Ubuntu)"
+      info "                  dnf install pandoc  (Fedora/RHEL)"
     fi
     info "See: https://pandoc.org/installing.html"
   fi
@@ -314,7 +319,7 @@ fi
 
 # ── 4. .env ───────────────────────────────────────────────────────────────────
 
-step "4/6  .env  (environment file)"
+step "4/7  .env  (environment file)  [required]"
 
 ENV_FILE="$PROJECT_ROOT/.env"
 ENV_EXAMPLE="$PROJECT_ROOT/.env.example"
@@ -329,12 +334,13 @@ else
     warn "Edit .env: set PRX_REPO_DIR, JIRA_URL, JIRA_USERNAME, JIRA_API_TOKEN"
   else
     err ".env.example not found — create .env manually (see README)"
+    impact "Plugin cannot load credentials — Jira and email features disabled"
   fi
 fi
 
 # ── 5. Claude Code settings.json (marketplace registration) ───────────────────
 
-step "5/6  Claude Code marketplace registration"
+step "5/7  Claude Code marketplace registration  [required]"
 
 # On WSL, Claude Code runs on Windows — write to the Windows user profile.
 # On Git Bash, $HOME already maps to the Windows user folder.
@@ -358,18 +364,45 @@ fi
 mkdir -p "$(dirname "$SETTINGS_FILE")"
 
 PYTHON_CMD="$(find_python || true)"
-if [ -z "$PYTHON_CMD" ] && [ "$IS_WIN_BASH" -eq 1 ]; then
-  info "Python not found — attempting to install..."
-  if install_python_win; then
-    PYTHON_CMD="$(find_python_win_after_install || true)"
-    [ -n "$PYTHON_CMD" ] && ok "Python installed ($(\"$PYTHON_CMD\" --version 2>&1))" \
-                         || warn "Python installed but not yet in PATH — re-run setup or open a new terminal"
+if [ -z "$PYTHON_CMD" ]; then
+  info "Python 3 not found — attempting to install..."
+  if [ "$IS_WIN_BASH" -eq 1 ]; then
+    if install_python_win; then
+      PYTHON_CMD="$(find_python_win_after_install || true)"
+      [ -n "$PYTHON_CMD" ] \
+        && ok "Python installed ($("$PYTHON_CMD" --version 2>&1))" \
+        || warn "Python installed but not yet in PATH — re-run setup or open a new terminal"
+    else
+      warn "Automatic Python install failed"
+      info "Install manually: winget install Python.Python.3"
+    fi
+  elif [ "$OS_RAW" = "Darwin" ]; then
+    BREW=$(brew_bin 2>/dev/null || echo "")
+    if [ -n "$BREW" ]; then
+      info "→ Homebrew"
+      "$BREW" install python3 2>&1 | tail -5
+    else
+      warn "Homebrew not installed — cannot auto-install Python"
+      info "Install: https://brew.sh  then run: brew install python3"
+    fi
+    PYTHON_CMD="$(find_python || true)"
   else
-    warn "Automatic Python install failed — install manually: winget install Python.Python.3"
+    if command -v apt-get &>/dev/null; then
+      info "→ apt"
+      sudo apt-get install -y python3 2>&1 | tail -3
+    elif command -v dnf &>/dev/null; then
+      info "→ dnf"
+      sudo dnf install -y python3 2>&1 | tail -3
+    elif command -v yum &>/dev/null; then
+      info "→ yum"
+      sudo yum install -y python3 2>&1 | tail -3
+    fi
+    PYTHON_CMD="$(find_python || true)"
   fi
 fi
 if [ -z "$PYTHON_CMD" ]; then
   err "Python 3 not found — add the marketplace manually (see README)"
+  impact "Prevoyant plugin will not load in Claude Code until the marketplace is registered"
   PYTHON_CMD="python3"  # dummy so subsequent heredocs fail gracefully
 fi
 
@@ -406,6 +439,7 @@ if [ $? -eq 0 ]; then
   ok "settings.json updated"
 else
   err "Could not update settings.json — add the marketplace manually (see README)"
+  impact "Prevoyant plugin will not load in Claude Code until the marketplace is registered"
 fi
 
 # ── 6. .claude/settings.local.json (permissions) ─────────────────────────────
@@ -413,7 +447,7 @@ fi
 # .claude/settings.json and work without this file.  This file only adds
 # pre-approved permissions so common commands don't trigger prompts.
 
-step "6/6  settings.local.json  (permission allowlist)"
+step "6/7  settings.local.json  (permission allowlist)  [optional]"
 
 LOCAL_SETTINGS="$PROJECT_ROOT/.claude/settings.local.json"
 mkdir -p "$PROJECT_ROOT/.claude"
@@ -451,6 +485,35 @@ PYEOF
   fi
 fi
 
+# ── 7. Plugin install + enable ────────────────────────────────────────────────
+
+step "7/7  plugin install + enable  [required]"
+
+PLUGIN_OK=0
+if command -v claude &>/dev/null; then
+  if claude plugin list 2>/dev/null | grep -q "prx@dodogeny"; then
+    ok "prx@dodogeny already installed"
+    claude plugin enable prx@dodogeny 2>/dev/null || true
+    PLUGIN_OK=1
+  else
+    info "Installing Prevoyant plugin..."
+    claude plugin install prx@dodogeny 2>&1 | tail -5 || true
+    claude plugin enable  prx@dodogeny 2>&1 | tail -3 || true
+    if claude plugin list 2>/dev/null | grep -q "prx@dodogeny"; then
+      ok "prx@dodogeny installed and enabled"
+      PLUGIN_OK=1
+    else
+      warn "Plugin install did not complete — run manually after setup:"
+      info "  claude plugin install prx@dodogeny && claude plugin enable prx@dodogeny"
+      impact "Prevoyant /prx:dev skill unavailable until the plugin is installed and enabled"
+    fi
+  fi
+else
+  warn "claude CLI not found in PATH — plugin will not be auto-installed"
+  impact "After Claude Code is installed, run:"
+  info "  claude plugin install prx@dodogeny && claude plugin enable prx@dodogeny"
+fi
+
 # ── summary ───────────────────────────────────────────────────────────────────
 
 printf "\n══════════════════════════════════════\n"
@@ -463,5 +526,9 @@ fi
 printf "\n${BOLD}Next steps:${NC}\n"
 printf "  1. Edit .env — set PRX_REPO_DIR, JIRA_URL, JIRA_USERNAME, JIRA_API_TOKEN\n"
 printf "     Get your Jira API token: https://id.atlassian.com/manage-profile/security/api-tokens\n"
-printf "  2. Run: claude plugin install prx@dodogeny && claude plugin enable prx@dodogeny\n"
-printf "  3. Open Claude Code and try: /prx:dev PROJ-1234\n\n"
+if [ "$PLUGIN_OK" -eq 1 ]; then
+  printf "  2. Open Claude Code and try: /prx:dev PROJ-1234\n\n"
+else
+  printf "  2. Run: claude plugin install prx@dodogeny && claude plugin enable prx@dodogeny\n"
+  printf "  3. Open Claude Code and try: /prx:dev PROJ-1234\n\n"
+fi

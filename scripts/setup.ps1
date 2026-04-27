@@ -203,8 +203,11 @@ try {
     info "Add the marketplace manually (see README)"
 }
 
-# ── 6. .claude/settings.local.json (hooks + permissions) ─────────────────────
-step "6/6  settings.local.json  (SessionStart hooks + ccusage permission)"
+# ── 6. .claude/settings.local.json (permissions) ─────────────────────────────
+# SessionStart hooks (load-env + check-budget) live in the committed
+# .claude/settings.json and work without this file.  This file only adds
+# pre-approved permissions so common commands don't trigger prompts.
+step "6/6  settings.local.json  (permission allowlist)"
 
 $LocalSettings = Join-Path $PROJECT_ROOT ".claude\settings.local.json"
 $LocalDir = Split-Path -Parent $LocalSettings
@@ -223,30 +226,11 @@ if (Test-Path $LocalSettings) {
                     "Bash(bash .claude/load-env.sh)"
                 )
             }
-            hooks = [PSCustomObject]@{
-                SessionStart = @(
-                    [PSCustomObject]@{
-                        hooks = @(
-                            [PSCustomObject]@{
-                                type          = "command"
-                                command       = "bash .claude/load-env.sh"
-                                statusMessage = "Loading .env..."
-                            },
-                            [PSCustomObject]@{
-                                type          = "command"
-                                command       = "bash scripts/check-budget.sh"
-                                statusMessage = "Checking monthly Claude budget..."
-                            }
-                        )
-                    }
-                )
-            }
         }
         $config | ConvertTo-Json -Depth 10 | Set-Content $LocalSettings -Encoding UTF8
-        ok "settings.local.json created (SessionStart hooks + ccusage permission)"
+        ok "settings.local.json created (permission allowlist)"
     } catch {
-        err "Could not create settings.local.json: $_"
-        info "Create manually — see README"
+        warn "Could not create settings.local.json: $_ — hooks still work via settings.json; you may see extra permission prompts"
     }
 }
 

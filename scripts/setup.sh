@@ -338,9 +338,12 @@ else
   err "Could not update settings.json — add the marketplace manually (see README)"
 fi
 
-# ── 6. .claude/settings.local.json (hooks + permissions) ─────────────────────
+# ── 6. .claude/settings.local.json (permissions) ─────────────────────────────
+# SessionStart hooks (load-env + check-budget) live in the committed
+# .claude/settings.json and work without this file.  This file only adds
+# pre-approved permissions so common commands don't trigger prompts.
 
-step "6/6  settings.local.json  (SessionStart hooks + ccusage permission)"
+step "6/6  settings.local.json  (permission allowlist)"
 
 LOCAL_SETTINGS="$PROJECT_ROOT/.claude/settings.local.json"
 mkdir -p "$PROJECT_ROOT/.claude"
@@ -361,24 +364,6 @@ config = {
             "Bash(bash scripts/check-budget.sh)",
             "Bash(bash .claude/load-env.sh)"
         ]
-    },
-    "hooks": {
-        "SessionStart": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "bash .claude/load-env.sh",
-                        "statusMessage": "Loading .env..."
-                    },
-                    {
-                        "type": "command",
-                        "command": "bash scripts/check-budget.sh",
-                        "statusMessage": "Checking monthly Claude budget..."
-                    }
-                ]
-            }
-        ]
     }
 }
 
@@ -390,9 +375,9 @@ print(f"       created {path}")
 PYEOF
 
   if [ $? -eq 0 ]; then
-    ok "settings.local.json created (SessionStart hooks + ccusage permission)"
+    ok "settings.local.json created (permission allowlist)"
   else
-    err "Could not create settings.local.json — create manually (see README)"
+    warn "Could not create settings.local.json — hooks still work via settings.json; you may see extra permission prompts"
   fi
 fi
 

@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/load-env.sh",
+            "statusMessage": "Loading .env..."
+          },
+          {
+            "type": "command",
+            "command": "bash scripts/check-budget.sh",
+            "statusMessage": "Checking monthly Claude budget..."
+          }
+        ]
+      }
+    ]
+  }
+}

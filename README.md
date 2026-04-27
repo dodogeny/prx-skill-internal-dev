@@ -282,6 +282,41 @@ Set `PRX_EMAIL_TO` to enable. Leave it unset to disable email entirely.
 | `WEBHOOK_SECRET` | — | Token appended to the webhook URL registered in Jira: `http://your-server:3000/jira-events?token=YOUR_SECRET`. Leave empty to skip token validation (only safe on a private network). |
 | `WEBHOOK_POLL_INTERVAL_DAYS` | `0` (disabled) | Run `poll-jira.sh` every N days as a scheduled fallback. Set to `0` or leave unset to disable. Fractional values work: `0.5` = every 12 hours. |
 
+### Notifications (optional)
+
+Set `PRX_NOTIFY_ENABLED=Y` to enable. Requires `PRX_EMAIL_TO` to be set.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PRX_NOTIFY_ENABLED` | `N` | Set to `Y` to enable email notifications for ticket lifecycle events. |
+| `PRX_NOTIFY_LEVEL` | `compact` | `full` — one email per event. `compact` — one summary email per job. `urgent` — issues and decision prompts only. `mute` — suppressed. |
+| `PRX_NOTIFY_MUTE_DAYS` | `0` | Temporarily mute all notifications for N days. |
+| `PRX_NOTIFY_MUTE_UNTIL` | — | Internal — set by the mute command. Do not edit manually. |
+| `PRX_NOTIFY_EVENTS` | all events | Comma-separated list of events to notify on: `jira_assigned`, `ticket_scheduled`, `ticket_queued`, `ticket_started`, `ticket_completed`, `ticket_failed`, `ticket_interrupted`, `poll_ran`. |
+
+### Health Monitor — Watchdog (optional)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PRX_WATCHDOG_ENABLED` | `N` | Set to `Y` to enable the in-process watchdog. Polls `GET /health` and sends an urgent email alert when the server stops responding; sends a recovery email when it comes back. Requires `PRX_EMAIL_TO`. |
+| `PRX_WATCHDOG_INTERVAL_SECS` | `60` | Seconds between health checks. |
+| `PRX_WATCHDOG_FAIL_THRESHOLD` | `3` | Consecutive failures before sending a DOWN alert. |
+
+### Disk Monitor (optional)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PRX_DISK_MONITOR_ENABLED` | `N` | Set to `Y` to enable disk space tracking for `~/.prevoyant/`. Sends an email alert when capacity crosses `PRX_DISK_CAPACITY_ALERT_PCT`. Cleanup must be approved via the dashboard — no automatic deletion. |
+| `PRX_DISK_MONITOR_INTERVAL_MINS` | `60` | Minutes between disk checks. |
+| `PRX_DISK_CAPACITY_ALERT_PCT` | `80` | Disk capacity % at which to send an alert email. |
+| `PRX_DISK_CLEANUP_INTERVAL_DAYS` | `7` | Days between cleanup passes (surfaces a pending-cleanup notice on the dashboard). |
+
+### Claude Budget Tracker (optional)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PRX_ANTHROPIC_ADMIN_KEY` | — | Anthropic Admin API key for actual billed USD spend via the Cost Report API. When set, the dashboard shows real billing figures. When unset, falls back to ccusage local token calculation (labelled "ccusage calc'd"). Generate at [platform.claude.com/settings/admin-keys](https://platform.claude.com/settings/admin-keys). Never commit — share via 1Password or your secrets manager. |
+
 ---
 
 ## Prerequisites

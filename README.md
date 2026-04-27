@@ -601,8 +601,12 @@ Story points = **Complexity + Risk + Repetition** (not hours). Scale: 1 · 2 · 
 │   ├── runner/                   # Claude CLI spawner + poll scheduler
 │   ├── webhooks/                 # Jira webhook receiver
 │   └── scripts/
-│       ├── start.sh              # Start server in background
-│       └── stop.sh               # Stop server by PID
+│       ├── start.sh              # Start server in background (macOS / Linux)
+│       ├── stop.sh               # Stop server by PID (macOS / Linux)
+│       ├── start.ps1             # Start server in background (Windows — PowerShell)
+│       ├── stop.ps1              # Stop server by PID (Windows — PowerShell)
+│       ├── start.cmd             # Start server (Windows — CMD / double-click wrapper)
+│       └── stop.cmd              # Stop server (Windows — CMD / double-click wrapper)
 ├── docs/
 │   └── prevoyant-server.md       # Full Prevoyant Server documentation
 ├── scripts/
@@ -829,6 +833,12 @@ rm -rf ~/.prevoyant/reports   # or the path set in CLAUDE_REPORT_DIR
 ---
 
 ## Changelog
+
+### v1.2.5 — Update Checker, Windows Server Scripts, Plugin Rename
+
+- **Automatic update checker:** A new background thread (`workers/updateChecker.js`) polls the GitHub repository at random intervals between **6 and 24 hours** to detect when a new plugin version is available. When a newer version is found, a yellow banner appears at the top of the dashboard showing the current vs latest version, a "View changes" link to GitHub releases, and an **Upgrade now** button. Clicking Upgrade runs `git pull --ff-only` in the repo root then automatically restarts the server — the button gives live feedback and the page reloads when the restart completes. A one-time email notification is also sent per new version (using the configured SMTP credentials). No new env vars required — runs automatically on every server start.
+- **Windows server scripts:** New start/stop scripts for running prevoyant-server on Windows. Use `server\scripts\start.cmd` / `stop.cmd` from Command Prompt (or double-click in Explorer), or `server\scripts\start.ps1` / `stop.ps1` from PowerShell directly. Mirrors the same PID-file approach as the existing macOS/Linux `start.sh` / `stop.sh` — checks for a stale PID, installs npm deps if missing, runs `node index.js` in the background, and writes `.server.pid`. The dashboard's **Upgrade now** flow is also platform-aware and uses the PowerShell scripts on Windows.
+- **Plugin rename:** Plugin identifier and skill prefix changed from `prevoyant-claude-plugin` to `prevoyant`. Install command is now `claude plugin install prevoyant@dodogeny`; skills are invoked as `/prevoyant:dev`, `/prevoyant:dev review`, `/prevoyant:dev estimate`. The npm `package.json` name (`prevoyant-claude-plugin`) is unchanged as it is not the Claude Code identifier.
 
 ### v1.2.4 — Scheduling, Notifications, Queue Priority, Auto-retry, KB Backup/Import, Activity Tracker, Health Monitor, Disk Monitor
 

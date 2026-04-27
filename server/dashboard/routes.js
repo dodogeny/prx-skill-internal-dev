@@ -51,6 +51,15 @@ try {
   pluginAuthor     = (meta.author && meta.author.name) || pluginAuthor;
 } catch (_) { /* non-fatal */ }
 
+// ── Update status helper ──────────────────────────────────────────────────────
+
+const UPDATE_STATUS_FILE = path.join(os.homedir(), '.prevoyant', 'server', 'update-status.json');
+
+function readUpdateStatus() {
+  try { return JSON.parse(fs.readFileSync(UPDATE_STATUS_FILE, 'utf8')); }
+  catch (_) { return { available: false, latestVersion: null, currentVersion: null, checkedAt: null }; }
+}
+
 // ── Disk status helper ────────────────────────────────────────────────────────
 
 const DISK_STATUS_FILE = path.join(os.homedir(), '.prevoyant', 'server', 'disk-status.json');
@@ -649,6 +658,47 @@ function renderDashboard(stats, budget) {
       </select>
     </div>
   </header>
+
+  ${(() => {
+    const upd = readUpdateStatus();
+    if (!upd.available) return '';
+    return `
+  <div id="update-banner" style="background:#fffbeb;border-bottom:1px solid #fcd34d;padding:.6rem 1.4rem;display:flex;align-items:center;gap:.8rem;font-size:.875rem;">
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <span style="color:#92400e;flex:1">
+      <strong>Update available</strong> &mdash; v${upd.latestVersion} is ready (you have v${upd.currentVersion}).
+      <a href="https://github.com/dodogeny/prevoyant-claude-plugin/releases" target="_blank" rel="noopener" style="color:#b45309;margin-left:.4rem">View changes</a>
+    </span>
+    <button onclick="upgradePlugin()" id="upgrade-btn" style="background:#d97706;color:#fff;border:none;border-radius:6px;padding:.35rem .9rem;font-size:.82rem;font-weight:600;cursor:pointer;font-family:inherit">
+      Upgrade now
+    </button>
+    <button onclick="document.getElementById('update-banner').remove()" style="background:none;border:none;color:#9ca3af;cursor:pointer;font-size:1rem;padding:0 .2rem" title="Dismiss">&#x2715;</button>
+  </div>
+  <script>
+    function upgradePlugin() {
+      const btn = document.getElementById('upgrade-btn');
+      btn.disabled = true;
+      btn.textContent = 'Upgrading…';
+      fetch('/dashboard/upgrade', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+          if (d.ok) {
+            btn.textContent = 'Done — restarting…';
+            setTimeout(() => location.reload(), 4000);
+          } else {
+            btn.textContent = 'Failed';
+            btn.style.background = '#dc2626';
+            alert('Upgrade failed:\\n' + (d.error || 'Unknown error'));
+          }
+        })
+        .catch(e => {
+          btn.textContent = 'Failed';
+          btn.style.background = '#dc2626';
+          alert('Upgrade error: ' + e.message);
+        });
+    }
+  </script>`;
+  })()}
 
   ${(() => {
     const ps = getPollStatus();
@@ -3239,6 +3289,40 @@ router.post('/restart', (_req, res) => {
       `sleep 1 && bash "${scripts}/stop.sh" && sleep 2 && bash "${scripts}/start.sh"`
     ], { detached: true, stdio: 'ignore' });
     child.unref();
+  });
+});
+
+// Upgrade — pulls latest from git then restarts the server
+router.post('/upgrade', (_req, res) => {
+  const repoRoot = path.resolve(__dirname, '../..');
+  const { execFile: ef } = require('child_process');
+
+  ef('git', ['-C', repoRoot, 'pull', '--ff-only'], { timeout: 60000 }, (err, stdout, stderr) => {
+    if (err) {
+      const msg = (stderr || err.message || '').trim();
+      activityLog.record('upgrade_failed', null, 'system', { error: msg });
+      return res.json({ ok: false, error: msg });
+    }
+
+    activityLog.record('upgrade_completed', null, 'system', { output: stdout.trim() });
+    res.json({ ok: true, output: stdout.trim() });
+
+    // Restart server after a brief delay so the JSON response reaches the client
+    setImmediate(() => {
+      const scripts = path.join(__dirname, '../scripts');
+      let child;
+      if (process.platform === 'win32') {
+        child = spawn('powershell', [
+          '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
+          `Start-Sleep 2; & "${scripts}\\stop.ps1"; Start-Sleep 2; & "${scripts}\\start.ps1"`
+        ], { detached: true, stdio: 'ignore' });
+      } else {
+        child = spawn('bash', ['-c',
+          `sleep 2 && bash "${scripts}/stop.sh" && sleep 2 && bash "${scripts}/start.sh"`
+        ], { detached: true, stdio: 'ignore' });
+      }
+      child.unref();
+    });
   });
 });
 

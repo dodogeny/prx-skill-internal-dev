@@ -41,6 +41,7 @@ app.use('/jira-events', jiraWebhook);
 
 let watchdogWorker  = null;
 let diskWorker      = null;
+let updateWorker    = null;
 
 function startWatchdog() {
   if (process.env.PRX_WATCHDOG_ENABLED !== 'Y') return;
@@ -122,8 +123,50 @@ function stopDiskMonitor() {
   }
 }
 
-process.on('SIGTERM', () => { stopWatchdog(); stopDiskMonitor(); setTimeout(() => process.exit(0), 600); });
-process.on('SIGINT',  () => { stopWatchdog(); stopDiskMonitor(); setTimeout(() => process.exit(0), 600); });
+function startUpdateChecker() {
+  const pluginJsonPath = path.join(__dirname, '../plugin/.claude-plugin/plugin.json');
+  let currentVersion = '0.0.0';
+  try { currentVersion = JSON.parse(require('fs').readFileSync(pluginJsonPath, 'utf8')).version || '0.0.0'; }
+  catch (_) {}
+
+  const workerData = {
+    currentVersion,
+    smtpHost: process.env.PRX_SMTP_HOST || '',
+    smtpPort: process.env.PRX_SMTP_PORT || '587',
+    smtpUser: process.env.PRX_SMTP_USER || '',
+    smtpPass: process.env.PRX_SMTP_PASS || '',
+    emailTo:  process.env.PRX_EMAIL_TO  || '',
+  };
+
+  updateWorker = new Worker(
+    path.join(__dirname, 'workers', 'updateChecker.js'),
+    { workerData }
+  );
+
+  updateWorker.on('message', msg => {
+    if (msg && msg.type === 'update-available') {
+      console.log(`[update-checker] New version available: v${msg.latestVersion} (current v${msg.currentVersion})`);
+    }
+  });
+  updateWorker.on('error', err =>
+    console.error('[update-checker] Worker thread error:', err.message)
+  );
+  updateWorker.on('exit', code => {
+    updateWorker = null;
+    if (code !== 0) console.error(`[update-checker] Worker thread exited with code ${code}`);
+  });
+
+  console.log(`[prevoyant-server] Update checker active — polls GitHub every 6–24 h (current v${currentVersion})`);
+}
+
+function stopUpdateChecker() {
+  if (updateWorker) {
+    updateWorker.postMessage({ type: 'graceful-stop' });
+  }
+}
+
+process.on('SIGTERM', () => { stopWatchdog(); stopDiskMonitor(); stopUpdateChecker(); setTimeout(() => process.exit(0), 600); });
+process.on('SIGINT',  () => { stopWatchdog(); stopDiskMonitor(); stopUpdateChecker(); setTimeout(() => process.exit(0), 600); });
 
 // Reactively start/stop workers when settings are saved from the dashboard.
 // This avoids requiring a full server restart for monitor enable/disable toggles.
@@ -147,6 +190,7 @@ app.listen(config.port, () => {
   restoreScheduledJobs();
   startWatchdog();
   startDiskMonitor();
+  startUpdateChecker();
 
   if (config.pollIntervalDays > 0) {
     schedulePollScript(config.pollIntervalDays);

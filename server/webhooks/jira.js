@@ -91,7 +91,16 @@ router.post('/', (req, res) => {
   activityLog.record('webhook_received', ticketKey, 'jira', { event: body.webhookEvent });
   tracker.recordQueued(ticketKey, 'webhook');
   console.log(`[webhook] ${ticketKey} — queued for analysis`);
-  jobQueue.enqueue(ticketKey);
+
+  // Extract ticket metadata from the webhook payload so kbQuery can do precise
+  // room matching without an extra Jira API call at spawn time.
+  const fields     = (body.issue || {}).fields || {};
+  const ticketMeta = {
+    components: (fields.components || []).map(c => c.name).filter(Boolean),
+    labels:     fields.labels || [],
+    summary:    fields.summary || '',
+  };
+  jobQueue.enqueue(ticketKey, 'dev', 'normal', ticketMeta);
 
   res.json({ status: 'queued', ticket: ticketKey });
 });

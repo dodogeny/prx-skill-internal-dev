@@ -1190,6 +1190,24 @@ Apply throughout:
 
 This step runs in two phases. **Phase A** (sync + initialise) runs before Step 1. **Phase B** (query) runs after Step 1 once ticket metadata is available.
 
+#### 0 — Server Pre-load Gate
+
+Before running any Phase A disk operations, check whether the server has already pre-loaded KB content into this prompt:
+
+1. Look for `<!-- KB_PRELOADED schemaVersion=X.Y -->` near the top of this message.
+2. If found, read `plugin/prevoyant/kb-schema.json` and get its `schemaVersion` field.
+3. **Versions match → pre-load is valid:**
+   - Output: `KB_STATUS: server pre-loaded (v{version}) — skipping Steps 0a and 0b disk reads.`
+   - Skip Steps 0a and 0b entirely.
+   - The **"Knowledge Base — Pre-loaded Context"** block at the top of this message contains INDEX.md, all shared files, Core Mental Map, Lessons Learned, and Agent Personal Memory.
+   - Use that content to run the Step 0b query logic (room matching, trigger scanning, building the Prior Knowledge block) without any additional file reads.
+   - Present the Prior Knowledge block before Step 2, then proceed to Step 1.
+4. **Sentinel absent or version mismatch → graceful fallback:**
+   - Output: `KB_STATUS: fallback to standard load (pre-load unavailable or schema updated — re-reading from disk).`
+   - Proceed with Steps 0a and 0b normally below.
+
+---
+
 #### 0a. Sync & Initialise
 
 ##### If `KB_MODE=local` (default):
@@ -4087,6 +4105,8 @@ Execute these steps when the invocation triggers **PR Review Mode** (see Mode Se
 
 Identical to Step 0 in Dev Mode. Run Phase A (initialise) before Step R1, and Phase B (query by components/labels) after Step R1.
 
+**Apply the server pre-load gate from Step 0** before any disk operations — same check, same fallback behaviour.
+
 The Prior Knowledge block carries into:
 - Step R2 (does KB confirm or extend the problem statement and acceptance criteria?)
 - Step R5 (reviewers must state whether KB patterns or risks are relevant to the diff — Morgan must reference KB history in the verdict)
@@ -4977,6 +4997,8 @@ Bryan observes silently and runs Step E7 if `PRX_INCLUDE_SM_IN_SESSIONS_ENABLED=
 ### Step E0 — KB Initialisation & System Knowledge Load
 
 Same process as Step 0 in Dev Mode. Pull KB and surface prior knowledge on the ticket's components and labels.
+
+**Apply the server pre-load gate from Step 0** before any disk operations — same check, same fallback behaviour.
 
 **Additionally**, each engineer reads the following before E2 begins — this is the system knowledge that will drive their estimates:
 

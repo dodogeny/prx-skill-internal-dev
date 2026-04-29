@@ -7,6 +7,8 @@ const path        = require('path');
 const config      = require('../config/env');
 const tracker     = require('../dashboard/tracker');
 const stages      = require('../dashboard/stages.json');
+const kbCache     = require('../kb/kbCache');
+const kbQuery     = require('../kb/kbQuery');
 
 // ── codeburn cost snapshot ────────────────────────────────────────────────────
 // Returns today's cumulative cost in USD from codeburn's local report,
@@ -132,11 +134,12 @@ function stageSequenceHint(mode) {
     + loadStageInstructions(list);
 }
 
-function modePrompt(ticketKey, mode) {
+function modePrompt(ticketKey, mode, kbBlock = null) {
   const base = mode === 'review'   ? `/prx:dev review ${ticketKey}`
              : mode === 'estimate' ? `/prx:dev estimate ${ticketKey}`
              : `/prx:dev ${ticketKey}`;
-  return base + stageSequenceHint(mode);
+  const invocation = base + stageSequenceHint(mode);
+  return kbBlock ? `${kbBlock}\n${invocation}` : invocation;
 }
 
 function reportAlreadyExists(ticketKey, mode) {
@@ -208,9 +211,19 @@ function killProcess(ticketKey) {
   return true;
 }
 
-async function runClaudeAnalysis(ticketKey, mode = 'dev') {
+async function runClaudeAnalysis(ticketKey, mode = 'dev', ticketMeta = {}) {
   // Snapshot daily spend before spawning so we can diff after completion.
   const costBefore = await getCodeburnDailyCost();
+
+  // Pre-load KB content so Claude skips Step 0a/0b disk reads.
+  // Falls back gracefully to null if KB is empty, encrypted, or unavailable.
+  let kbBlock = null;
+  try {
+    kbBlock = kbQuery.buildPriorKnowledgeBlock({ ticketKey, ...ticketMeta });
+    if (kbBlock) console.log(`[runner] ${ticketKey} — KB pre-loaded (${kbBlock.length} chars)`);
+  } catch (err) {
+    console.warn(`[runner] ${ticketKey} — KB pre-load skipped: ${err.message}`);
+  }
 
   let runError = null;
   try {
@@ -231,7 +244,7 @@ async function runClaudeAnalysis(ticketKey, mode = 'dev') {
       'claude',
       [
         '--dangerously-skip-permissions',
-        '--print', modePrompt(ticketKey, mode),
+        '--print', modePrompt(ticketKey, mode, kbBlock),
         '--mcp-config', mcpConfig,
         '--output-format', 'stream-json',
         '--verbose',
@@ -327,6 +340,9 @@ async function runClaudeAnalysis(ticketKey, mode = 'dev') {
     tracker.recordActualCost(ticketKey, sessionCost);
     console.log(`[runner] ${ticketKey} codeburn cost: $${sessionCost.toFixed(6)}`);
   }
+
+  // Invalidate KB cache — Step 13 may have written new KB data.
+  kbCache.invalidate();
 
   if (runError) throw runError;
 }

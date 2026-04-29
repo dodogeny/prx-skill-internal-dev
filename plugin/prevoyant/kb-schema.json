@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "1.0",
+  "layers": {
+    "index": "INDEX.md",
+    "shared": "shared",
+    "coreMetalMap": "core-mental-map",
+    "lessonsLearned": "lessons-learned",
+    "personaMemory": "personas/memory",
+    "agents": ["morgan", "alex", "sam", "jordan", "henk", "riley", "bryan"]
+  }
+}

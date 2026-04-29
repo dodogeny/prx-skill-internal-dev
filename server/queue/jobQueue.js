@@ -22,8 +22,8 @@ function retryConfig() {
   };
 }
 
-function enqueue(ticketKey, mode = 'dev', priority = 'normal') {
-  const job = { ticketKey, mode, priority };
+function enqueue(ticketKey, mode = 'dev', priority = 'normal', meta = {}) {
+  const job = { ticketKey, mode, priority, meta };
   if (priority === 'urgent') {
     queue.unshift(job);
   } else {
@@ -41,12 +41,12 @@ function getQueueDepth() { return queue.length; }
 function drain() {
   if (paused) return;
   while (running < MAX_CONCURRENT && queue.length > 0) {
-    const { ticketKey: ticket, mode, priority } = queue.shift();
+    const { ticketKey: ticket, mode, priority, meta } = queue.shift();
     running++;
     tracker.recordStarted(ticket);
     console.log(`[queue] Starting ${ticket} mode=${mode} priority=${priority} (running: ${running}/${MAX_CONCURRENT})`);
 
-    runClaudeAnalysis(ticket, mode)
+    runClaudeAnalysis(ticket, mode, meta)
       .then(() => {
         retryCounts.delete(ticket);
         tracker.recordCompleted(ticket, true);

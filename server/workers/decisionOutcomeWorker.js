@@ -351,6 +351,50 @@ function log(level, msg) {
   console.log(`[${ts}] [decision-outcome/${level}] ${msg}`);
 }
 
+// ── Deterministic scheduling helpers ─────────────────────────────────────────
+//
+// PRX_DECISION_OUTCOME_RUN_AT (optional) — "HH:MM" 24-hour clock.
+// When set, the worker runs at that time every day regardless of when the
+// server started.  When unset, falls back to the interval-elapsed approach.
+
+function runAtTime() {
+  const v = (process.env.PRX_DECISION_OUTCOME_RUN_AT || '').trim();
+  return /^\d{1,2}:\d{2}$/.test(v) ? v : null;
+}
+
+// ms until the next scheduled run (clock mode or interval mode).
+function msUntilNextRun() {
+  const runAt = runAtTime();
+  if (runAt) {
+    const [h, m] = runAt.split(':').map(Number);
+    const next   = new Date();
+    next.setHours(h, m, 0, 0);
+    if (next <= new Date()) next.setDate(next.getDate() + 1);
+    return next.getTime() - Date.now();
+  }
+  // Interval mode: remaining time until intervalMs elapses since lastRun.
+  const s         = loadState();
+  const remaining = intervalMs() - (Date.now() - (s.lastRun || 0));
+  return Math.max(60_000, remaining);
+}
+
+// True when the run is actually due (avoids spurious fires when the 1h cap
+// causes the loop to wake before the target time).
+function isRunDue() {
+  const runAt = runAtTime();
+  if (runAt) {
+    const [h, m] = runAt.split(':').map(Number);
+    const now    = new Date();
+    const todayTarget = new Date(now);
+    todayTarget.setHours(h, m, 0, 0);
+    if (now < todayTarget) return false;        // not yet reached today's slot
+    const s = loadState();
+    return !s.lastRun || s.lastRun < todayTarget.getTime(); // not already run today
+  }
+  const s = loadState();
+  return !s.lastRun || (Date.now() - s.lastRun) >= intervalMs();
+}
+
 // ── Main loop ─────────────────────────────────────────────────────────────────
 
 let halted = false;
@@ -362,22 +406,24 @@ if (parentPort) {
 }
 
 (function main() {
+  const runAt = runAtTime();
   log('info',
     `Started — lookback=${lookbackDays()}d interval=${process.env.PRX_DECISION_OUTCOME_INTERVAL_DAYS || 7}d ` +
-    `min-evidence=${minEvidence()}`
+    `min-evidence=${minEvidence()}` + (runAt ? ` run-at=${runAt}` : '')
   );
 
-  const state   = loadState();
-  const overdue = !state.lastRun || (Date.now() - state.lastRun) >= intervalMs();
-  if (overdue) {
-    try { runScan(state); } catch (e) { log('error', e.message); }
+  if (isRunDue()) {
+    try { runScan(loadState()); } catch (e) { log('error', e.message); }
   }
 
   (async function loop() {
     while (!halted) {
-      await new Promise(r => setTimeout(r, Math.min(intervalMs(), 3_600_000)));
+      // Cap sleep at 1h so wake-from-sleep / time-change are caught promptly.
+      await new Promise(r => setTimeout(r, Math.min(msUntilNextRun(), 3_600_000)));
       if (halted) break;
-      try { runScan(loadState()); } catch (e) { log('error', e.message); }
+      if (isRunDue()) {
+        try { runScan(loadState()); } catch (e) { log('error', e.message); }
+      }
     }
     log('info', 'Stopped');
   })();

@@ -242,6 +242,42 @@ function log(level, msg) {
   console.log(`[${ts}] [pattern-miner/${level}] ${msg}`);
 }
 
+// ── Deterministic scheduling helpers ──────────────────────────────────────────
+
+function runAtTime() {
+  const v = (process.env.PRX_PATTERN_MINER_RUN_AT || '').trim();
+  return /^\d{1,2}:\d{2}$/.test(v) ? v : null;
+}
+
+function msUntilNextRun() {
+  const runAt = runAtTime();
+  if (runAt) {
+    const [h, m] = runAt.split(':').map(Number);
+    const next   = new Date();
+    next.setHours(h, m, 0, 0);
+    if (next <= new Date()) next.setDate(next.getDate() + 1);
+    return next.getTime() - Date.now();
+  }
+  const s         = loadState();
+  const remaining = intervalMs() - (Date.now() - (s.lastRun || 0));
+  return Math.max(60_000, remaining);
+}
+
+function isRunDue() {
+  const runAt = runAtTime();
+  if (runAt) {
+    const [h, m] = runAt.split(':').map(Number);
+    const now    = new Date();
+    const todayTarget = new Date(now);
+    todayTarget.setHours(h, m, 0, 0);
+    if (now < todayTarget) return false;
+    const s = loadState();
+    return !s.lastRun || s.lastRun < todayTarget.getTime();
+  }
+  const s = loadState();
+  return !s.lastRun || (Date.now() - s.lastRun) >= intervalMs();
+}
+
 // ── Main loop ──────────────────────────────────────────────────────────────────
 
 let halted = false;
@@ -253,17 +289,14 @@ if (parentPort) {
 }
 
 (async () => {
-  log('info', `Started — interval=${process.env.PRX_PATTERN_MINER_INTERVAL_DAYS || 7}d minTickets=${minTickets()}`);
+  const runAt = runAtTime();
+  log('info', `Started — interval=${process.env.PRX_PATTERN_MINER_INTERVAL_DAYS || 7}d minTickets=${minTickets()}` + (runAt ? ` run-at=${runAt}` : ''));
 
-  const state = loadState();
-
-  // Run immediately if overdue or never run
-  const overdue = !state.lastRun || (Date.now() - state.lastRun) >= intervalMs();
-  if (overdue) runMine(state);
+  if (isRunDue()) runMine(loadState());
 
   while (!halted) {
-    await new Promise(r => setTimeout(r, Math.min(intervalMs(), 3_600_000)));
-    if (!halted) runMine(loadState());
+    await new Promise(r => setTimeout(r, Math.min(msUntilNextRun(), 3_600_000)));
+    if (!halted && isRunDue()) runMine(loadState());
   }
 
   log('info', 'Stopped');

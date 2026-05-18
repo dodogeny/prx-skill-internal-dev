@@ -231,6 +231,46 @@ function log(level, msg) {
   console.log(`[${ts}] [kb-staleness/${level}] ${msg}`);
 }
 
+// ── Deterministic scheduling helpers ─────────────────────────────────────────
+//
+// PRX_STALENESS_RUN_AT (optional) — "HH:MM" 24-hour clock.
+// When set, the worker runs at that time every day regardless of when the
+// server started.  When unset, falls back to the interval-elapsed approach.
+
+function runAtTime() {
+  const v = (process.env.PRX_STALENESS_RUN_AT || '').trim();
+  return /^\d{1,2}:\d{2}$/.test(v) ? v : null;
+}
+
+function msUntilNextRun() {
+  const runAt = runAtTime();
+  if (runAt) {
+    const [h, m] = runAt.split(':').map(Number);
+    const next   = new Date();
+    next.setHours(h, m, 0, 0);
+    if (next <= new Date()) next.setDate(next.getDate() + 1);
+    return next.getTime() - Date.now();
+  }
+  const s         = loadState();
+  const remaining = intervalMs() - (Date.now() - (s.lastRun || 0));
+  return Math.max(60_000, remaining);
+}
+
+function isRunDue() {
+  const runAt = runAtTime();
+  if (runAt) {
+    const [h, m] = runAt.split(':').map(Number);
+    const now    = new Date();
+    const todayTarget = new Date(now);
+    todayTarget.setHours(h, m, 0, 0);
+    if (now < todayTarget) return false;
+    const s = loadState();
+    return !s.lastRun || s.lastRun < todayTarget.getTime();
+  }
+  const s = loadState();
+  return !s.lastRun || (Date.now() - s.lastRun) >= intervalMs();
+}
+
 // ── Main loop ──────────────────────────────────────────────────────────────────
 
 let halted = false;
@@ -242,15 +282,14 @@ if (parentPort) {
 }
 
 (async () => {
-  log('info', `Started — interval=${process.env.PRX_STALENESS_INTERVAL_DAYS || 7}d repo=${repoDir() || 'not set'}`);
+  const runAt = runAtTime();
+  log('info', `Started — interval=${process.env.PRX_STALENESS_INTERVAL_DAYS || 7}d repo=${repoDir() || 'not set'}` + (runAt ? ` run-at=${runAt}` : ''));
 
-  const state  = loadState();
-  const overdue = !state.lastRun || (Date.now() - state.lastRun) >= intervalMs();
-  if (overdue) runScan(state);
+  if (isRunDue()) runScan(loadState());
 
   while (!halted) {
-    await new Promise(r => setTimeout(r, Math.min(intervalMs(), 3_600_000)));
-    if (!halted) runScan(loadState());
+    await new Promise(r => setTimeout(r, Math.min(msUntilNextRun(), 3_600_000)));
+    if (!halted && isRunDue()) runScan(loadState());
   }
 
   log('info', 'Stopped');

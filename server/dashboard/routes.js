@@ -4750,6 +4750,14 @@ function renderSettings(vals, flash) {
     .btn-import:disabled { background:#9ca3af; cursor:not-allowed; }
     .bk-import-status { display:none; margin-top:.65rem; padding:.5rem .8rem; border-radius:7px;
                         font-size:.82rem; font-weight:500; border:1px solid transparent; }
+    .s-tabs { display:flex; gap:2px; margin-bottom:1.25rem; border-bottom:2px solid var(--border-light); }
+    .s-tab { background:none; border:none; border-bottom:2px solid transparent; margin-bottom:-2px;
+             padding:.6rem 1.4rem; font-size:.83rem; font-weight:700; letter-spacing:.04em; text-transform:uppercase;
+             color:var(--text-3); cursor:pointer; font-family:inherit; transition:color .15s,border-color .15s; }
+    .s-tab.active { color:var(--accent); border-bottom-color:var(--accent); }
+    .s-tab:hover:not(.active) { color:var(--text-2); }
+    .s-tab-pane { display:none; }
+    .s-tab-pane.active { display:block; }
   </style>
 </head>
 <body>
@@ -4767,6 +4775,12 @@ function renderSettings(vals, flash) {
     <form method="POST" action="/dashboard/settings">
       <input type="hidden" name="_restart" id="_restart" value="0">
 
+      <div class="s-tabs">
+        <button type="button" class="s-tab active" onclick="switchSettingsTab('mandatory',this)">Mandatory</button>
+        <button type="button" class="s-tab" onclick="switchSettingsTab('optional',this)">Optional</button>
+      </div>
+
+      <div id="s-tab-mandatory" class="s-tab-pane active">
       <!-- Repository -->
       <details class="s-section" open>
         <summary>
@@ -4796,7 +4810,9 @@ function renderSettings(vals, flash) {
           </div>
         </div>
       </details>
+      </div><!-- /s-tab-mandatory -->
 
+      <div id="s-tab-optional" class="s-tab-pane">
       <!-- Webhook & Polling -->
       <details class="s-section">
         <summary>
@@ -5405,68 +5421,6 @@ function renderSettings(vals, flash) {
         </div>
       </details>
 
-      <!-- Memory Pattern Miner -->
-      <details class="s-section" id="pattern-miner">
-        <summary>
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          Memory Pattern Miner
-          <span class="s-opt">Optional</span>
-          <span class="s-chevron">›</span>
-        </summary>
-        <div class="s-body">
-          <div class="s-field span2">
-            <div class="s-hint" style="margin-top:0">
-              Background worker that periodically scans agent persona memory files for learnings
-              that recur across multiple distinct tickets. Pattern candidates are written to
-              <code>~/.prevoyant/knowledge-buildup/pattern-proposals.md</code> (PENDING APPROVAL).
-              A human or the Step 13j review process must promote them to
-              <code>shared/patterns.md</code> — nothing is written to the KB directly.
-            </div>
-          </div>
-          ${fld('PRX_PATTERN_MINER_ENABLED','Enable Pattern Miner','select',v('PRX_PATTERN_MINER_ENABLED') || 'N','','Starts the Memory Pattern Miner background worker.',
-            [{v:'N',l:'N — disabled (default)'},{v:'Y',l:'Y — enabled'}])}
-          ${fld('PRX_PATTERN_MINER_INTERVAL_DAYS','Run interval (days)','text',v('PRX_PATTERN_MINER_INTERVAL_DAYS'),'7','Days between scan runs. Fractional values supported. Default: 7.')}
-          ${fld('PRX_PATTERN_MINER_MIN_TICKETS','Min tickets for pattern','number',v('PRX_PATTERN_MINER_MIN_TICKETS'),'3','Minimum number of distinct tickets a learning must appear in to qualify as a pattern. Minimum enforced: 2. Default: 3.')}
-          ${fld('PRX_PATTERN_MINER_MAX_PROPOSALS','Max proposals per run','number',v('PRX_PATTERN_MINER_MAX_PROPOSALS'),'20','Maximum proposals written per run. Default: 20.')}
-          <div class="s-field span2" style="margin-top:4px">
-            <button type="button" onclick="patternMinerRunNow()"
-              style="font-size:11px;padding:3px 12px;border:1px solid #6366f1;border-radius:6px;background:#eef2ff;color:#4338ca;cursor:pointer">
-              ▶ Run now
-            </button>
-          </div>
-        </div>
-      </details>
-
-      <!-- KB Staleness Scanner -->
-      <details class="s-section" id="kb-staleness">
-        <summary>
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-          KB Staleness Scanner
-          <span class="s-opt">Optional</span>
-          <span class="s-chevron">›</span>
-        </summary>
-        <div class="s-body">
-          <div class="s-field span2">
-            <div class="s-hint" style="margin-top:0">
-              Background worker that periodically walks all <code>.md</code> files in the knowledge base,
-              extracts <code>ref: file:line</code> references, and checks whether those source files still
-              exist at the configured <code>PRX_REPO_DIR</code>. Stale refs are written to
-              <code>~/.prevoyant/knowledge-buildup/stale-refs.md</code> for review.
-              Requires <code>PRX_REPO_DIR</code> to be configured.
-            </div>
-          </div>
-          ${fld('PRX_STALENESS_ENABLED','Enable Staleness Scanner','select',v('PRX_STALENESS_ENABLED') || 'N','','Starts the KB Staleness Scanner background worker.',
-            [{v:'N',l:'N — disabled (default)'},{v:'Y',l:'Y — enabled'}])}
-          ${fld('PRX_STALENESS_INTERVAL_DAYS','Run interval (days)','text',v('PRX_STALENESS_INTERVAL_DAYS'),'7','Days between scan runs. Fractional values supported. Default: 7.')}
-          <div class="s-field span2" style="margin-top:4px">
-            <button type="button" onclick="stalenessRunNow()"
-              style="font-size:11px;padding:3px 12px;border:1px solid #6366f1;border-radius:6px;background:#eef2ff;color:#4338ca;cursor:pointer">
-              ▶ Run now
-            </button>
-          </div>
-        </div>
-      </details>
-
       <!-- Cortex — Intelligence Layer -->
       <details class="s-section" id="cortex" open>
         <summary>
@@ -5523,90 +5477,85 @@ function renderSettings(vals, flash) {
         </div>
       </details>
 
-      <!-- Conflict Checker (Co-Change Index tuning) -->
-      <details class="s-section" id="conflict-checker">
+      <!-- Advanced / disabled-by-default workers -->
+      <details class="s-section" id="advanced-workers">
         <summary>
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-9 4 18 3-9h4"/></svg>
-          Conflict Checker — Co-Change Tuning
-          <span class="s-opt">Optional</span>
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07M8.46 8.46a5 5 0 0 0 0 7.07"/></svg>
+          Advanced Workers
+          <span class="s-opt">Disabled by default</span>
           <span class="s-chevron">›</span>
         </summary>
         <div class="s-body">
-          <div class="s-field span2">
-            <div class="s-hint" style="margin-top:0">
-              The conflict checker runs on every ticket enqueue. Direct file-overlap is always
-              checked; in addition, a co-change pass mines <code>git log</code> in <code>PRX_REPO_DIR</code>
-              to surface <strong>silent conflicts</strong> — files that don't directly overlap but
-              historically change together. The co-change index is cached at
-              <code>~/.prevoyant/server/co-change-cache.json</code>.
-            </div>
-          </div>
-          ${fld('PRX_COCHANGE_WINDOW_DAYS','History window (days)','number',v('PRX_COCHANGE_WINDOW_DAYS'),'180','How many days of git history to mine for co-change pairs. Default: 180.')}
-          ${fld('PRX_COCHANGE_CACHE_TTL_DAYS','Cache TTL (days)','number',v('PRX_COCHANGE_CACHE_TTL_DAYS'),'7','Rebuild the cache when older than this many days. Default: 7.')}
-        </div>
-      </details>
 
-      <!-- Decision-Outcome Linker -->
-      <details class="s-section" id="decision-outcome">
-        <summary>
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-          Decision-Outcome Linker
-          <span class="s-opt">Optional</span>
-          <span class="s-chevron">›</span>
-        </summary>
-        <div class="s-body">
-          <div class="s-field span2">
-            <div class="s-hint" style="margin-top:0">
-              Background worker that joins KB decision entries (<code>shared/decisions.md</code>,
-              <code>shared/skill-changelog.md</code>, <code>lessons-learned/*.md</code>) against
-              recent agent retros and grades each decision <code>CONFIRMED</code>,
-              <code>CONTRADICTED</code>, or <code>PENDING</code>. Proposals are written to
-              <code>~/.prevoyant/knowledge-buildup/decision-outcomes.md</code> for review —
-              nothing is written to the KB directly.
-            </div>
+          <!-- Decision-Outcome Linker -->
+          <div class="s-field span2" style="border-bottom:1px solid var(--border);padding-bottom:1rem;margin-bottom:.5rem">
+            <span class="s-label" style="font-weight:600">Decision-Outcome Linker</span>
+            <span class="s-hint">Joins KB decision entries against agent retros and grades each decision <code>CONFIRMED</code>, <code>CONTRADICTED</code>, or <code>PENDING</code>. Proposals go to <code>~/.prevoyant/knowledge-buildup/decision-outcomes.md</code> — nothing is written to the KB directly.</span>
           </div>
           ${fld('PRX_DECISION_OUTCOME_ENABLED','Enable Decision-Outcome Linker','select',v('PRX_DECISION_OUTCOME_ENABLED') || 'N','','Starts the Decision-Outcome Linker background worker.',
             [{v:'N',l:'N — disabled (default)'},{v:'Y',l:'Y — enabled'}])}
-          ${fld('PRX_DECISION_OUTCOME_INTERVAL_DAYS','Run interval (days)','text',v('PRX_DECISION_OUTCOME_INTERVAL_DAYS'),'7','Days between scan runs. Fractional values supported. Default: 7.')}
+          ${fld('PRX_DECISION_OUTCOME_RUN_AT','Run at time (HH:MM)','text',v('PRX_DECISION_OUTCOME_RUN_AT'),'','24-hour clock time to run each day, e.g. 02:00. Deterministic — ignores server start time. Leave blank to use interval-based scheduling.')}
+          ${fld('PRX_DECISION_OUTCOME_INTERVAL_DAYS','Run interval (days)','text',v('PRX_DECISION_OUTCOME_INTERVAL_DAYS'),'7','Used when Run at time is blank. Days between runs. Default: 7.')}
           ${fld('PRX_DECISION_OUTCOME_LOOKBACK_DAYS','Retro lookback (days)','number',v('PRX_DECISION_OUTCOME_LOOKBACK_DAYS'),'90','Only consider retros modified within this many days. Default: 90.')}
-          ${fld('PRX_DECISION_OUTCOME_MIN_EVIDENCE','Min confirmations for CONFIRMED','number',v('PRX_DECISION_OUTCOME_MIN_EVIDENCE'),'2','Minimum confirmation count required to grade a decision as CONFIRMED (with zero contradictions). Default: 2.')}
+          ${fld('PRX_DECISION_OUTCOME_MIN_EVIDENCE','Min confirmations for CONFIRMED','number',v('PRX_DECISION_OUTCOME_MIN_EVIDENCE'),'2','Confirmations required to grade a decision CONFIRMED (zero contradictions). Default: 2.')}
           <div class="s-field span2" style="margin-top:4px">
             <button type="button" onclick="decisionOutcomeRunNow()"
               style="font-size:11px;padding:3px 12px;border:1px solid #6366f1;border-radius:6px;background:#eef2ff;color:#4338ca;cursor:pointer">
               ▶ Run now
             </button>
           </div>
-        </div>
-      </details>
 
-      <!-- Stale Branch Detector -->
-      <details class="s-section" id="stale-branch">
-        <summary>
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="3" r="3"/><circle cx="6" cy="21" r="3"/><circle cx="18" cy="12" r="3"/><path d="M6 6v12"/><path d="M18 9a9 9 0 0 0-9-9"/></svg>
-          Stale Branch Detector
-          <span class="s-opt">Optional</span>
-          <span class="s-chevron">›</span>
-        </summary>
-        <div class="s-body">
-          <div class="s-field span2">
-            <div class="s-hint" style="margin-top:0">
-              Background worker that periodically lists feature/fix branches in <code>PRX_REPO_DIR</code>,
-              cross-references each Jira ticket key against KB session records and checks Jira for any
-              linked PR. Branches whose ticket has a completed KB session but no PR (and no recent commits)
-              are flagged in <code>~/.prevoyant/knowledge-buildup/stale-branches.md</code> for review.
-              Requires <code>PRX_REPO_DIR</code> and Jira credentials.
-            </div>
+          <!-- Stale Branch Detector -->
+          <div class="s-field span2" style="border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:.75rem 0 1rem;margin:.75rem 0 .5rem">
+            <span class="s-label" style="font-weight:600">Stale Branch Detector</span>
+            <span class="s-hint">Lists feature/fix branches in <code>PRX_REPO_DIR</code>, cross-references against KB sessions and Jira PRs, and flags branches with a completed KB session but no PR. Requires <code>PRX_REPO_DIR</code> and Jira credentials.</span>
           </div>
           ${fld('PRX_STALE_BRANCH_ENABLED','Enable Stale Branch Detector','select',v('PRX_STALE_BRANCH_ENABLED') || 'N','','Starts the Stale Branch Detector background worker.',
             [{v:'N',l:'N — disabled (default)'},{v:'Y',l:'Y — enabled'}])}
+          ${fld('PRX_STALE_BRANCH_RUN_AT','Run at time (HH:MM)','text',v('PRX_STALE_BRANCH_RUN_AT'),'','24-hour clock time to run each day, e.g. 03:00. Deterministic — ignores server start time. Leave blank to use interval-based scheduling.')}
           ${fld('PRX_STALE_BRANCH_DAYS','Stale after (days quiet)','number',v('PRX_STALE_BRANCH_DAYS'),'14','Branches with no commit activity for this many days are flagged. Default: 14.')}
-          ${fld('PRX_STALE_BRANCH_INTERVAL_DAYS','Run interval (days)','text',v('PRX_STALE_BRANCH_INTERVAL_DAYS'),'1','Days between scan runs. Fractional values supported. Default: 1.')}
+          ${fld('PRX_STALE_BRANCH_INTERVAL_DAYS','Run interval (days)','text',v('PRX_STALE_BRANCH_INTERVAL_DAYS'),'1','Used when Run at time is blank. Days between runs. Default: 1.')}
           <div class="s-field span2" style="margin-top:4px">
             <button type="button" onclick="staleBranchRunNow()"
               style="font-size:11px;padding:3px 12px;border:1px solid #6366f1;border-radius:6px;background:#eef2ff;color:#4338ca;cursor:pointer">
               ▶ Run now
             </button>
           </div>
+
+          <!-- Memory Pattern Miner -->
+          <div class="s-field span2" style="border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:.75rem 0 1rem;margin:.75rem 0 .5rem">
+            <span class="s-label" style="font-weight:600">Memory Pattern Miner</span>
+            <span class="s-hint">Scans agent persona memory files for learnings recurring across 3+ distinct tickets. Candidates go to <code>~/.prevoyant/knowledge-buildup/pattern-proposals.md</code> (PENDING APPROVAL) — nothing is written to the KB directly.</span>
+          </div>
+          ${fld('PRX_PATTERN_MINER_ENABLED','Enable Pattern Miner','select',v('PRX_PATTERN_MINER_ENABLED') || 'N','','Starts the Memory Pattern Miner background worker.',
+            [{v:'N',l:'N — disabled (default)'},{v:'Y',l:'Y — enabled'}])}
+          ${fld('PRX_PATTERN_MINER_RUN_AT','Run at time (HH:MM)','text',v('PRX_PATTERN_MINER_RUN_AT'),'','24-hour clock time to run each day, e.g. 04:00. Deterministic — ignores server start time. Leave blank to use interval-based scheduling.')}
+          ${fld('PRX_PATTERN_MINER_INTERVAL_DAYS','Run interval (days)','text',v('PRX_PATTERN_MINER_INTERVAL_DAYS'),'7','Used when Run at time is blank. Days between scan runs. Default: 7.')}
+          ${fld('PRX_PATTERN_MINER_MIN_TICKETS','Min tickets for pattern','number',v('PRX_PATTERN_MINER_MIN_TICKETS'),'3','Minimum distinct tickets a learning must appear in. Min enforced: 2. Default: 3.')}
+          ${fld('PRX_PATTERN_MINER_MAX_PROPOSALS','Max proposals per run','number',v('PRX_PATTERN_MINER_MAX_PROPOSALS'),'20','Maximum proposals written per run. Default: 20.')}
+          <div class="s-field span2" style="margin-top:4px">
+            <button type="button" onclick="patternMinerRunNow()"
+              style="font-size:11px;padding:3px 12px;border:1px solid #6366f1;border-radius:6px;background:#eef2ff;color:#4338ca;cursor:pointer">
+              ▶ Run now
+            </button>
+          </div>
+
+          <!-- KB Staleness Scanner -->
+          <div class="s-field span2" style="border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:.75rem 0 1rem;margin:.75rem 0 .5rem">
+            <span class="s-label" style="font-weight:600">KB Staleness Scanner</span>
+            <span class="s-hint">Walks all <code>.md</code> files in the KB, extracts <code>ref: file:line</code> references, and checks whether those source files still exist at <code>PRX_REPO_DIR</code>. Stale refs go to <code>~/.prevoyant/knowledge-buildup/stale-refs.md</code>. Requires <code>PRX_REPO_DIR</code>.</span>
+          </div>
+          ${fld('PRX_STALENESS_ENABLED','Enable Staleness Scanner','select',v('PRX_STALENESS_ENABLED') || 'N','','Starts the KB Staleness Scanner background worker.',
+            [{v:'N',l:'N — disabled (default)'},{v:'Y',l:'Y — enabled'}])}
+          ${fld('PRX_STALENESS_RUN_AT','Run at time (HH:MM)','text',v('PRX_STALENESS_RUN_AT'),'','24-hour clock time to run each day, e.g. 05:00. Deterministic — ignores server start time. Leave blank to use interval-based scheduling.')}
+          ${fld('PRX_STALENESS_INTERVAL_DAYS','Run interval (days)','text',v('PRX_STALENESS_INTERVAL_DAYS'),'7','Used when Run at time is blank. Days between scan runs. Default: 7.')}
+          <div class="s-field span2" style="margin-top:4px">
+            <button type="button" onclick="stalenessRunNow()"
+              style="font-size:11px;padding:3px 12px;border:1px solid #6366f1;border-radius:6px;background:#eef2ff;color:#4338ca;cursor:pointer">
+              ▶ Run now
+            </button>
+          </div>
+
         </div>
       </details>
 
@@ -5681,6 +5630,8 @@ function renderSettings(vals, flash) {
         </div>
       </details>
 
+      </div><!-- /s-tab-optional -->
+
       <div class="s-actions">
         <button type="submit" class="btn-save">Save</button>
         <button type="button" class="btn-restart" onclick="saveAndRestart()">Save &amp; Restart Server</button>
@@ -5697,6 +5648,12 @@ function renderSettings(vals, flash) {
     function saveAndRestart() {
       document.getElementById('_restart').value = '1';
       document.querySelector('form').submit();
+    }
+    function switchSettingsTab(name, btn) {
+      document.querySelectorAll('.s-tab-pane').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.s-tab').forEach(b => b.classList.remove('active'));
+      document.getElementById('s-tab-' + name).classList.add('active');
+      btn.classList.add('active');
     }
 
     // ── Hermes status ─────────────────────────────────────────────────────────
@@ -7618,10 +7575,10 @@ router.post('/settings', express.urlencoded({ extended: false }), (req, res) => 
     'PRX_WATCH_ENABLED', 'PRX_WATCH_POLL_INTERVAL', 'PRX_WATCH_MAX_POLLS',
     'PRX_WATCH_LOG_KEEP_DAYS', 'PRX_WATCH_LOG_KEEP_PER_TICKET',
     'PRX_KBFLOW_ENABLED', 'PRX_KBFLOW_INTERVAL_DAYS', 'PRX_KBFLOW_LOOKBACK_DAYS', 'PRX_KBFLOW_MAX_FLOWS',
-    'PRX_PATTERN_MINER_ENABLED', 'PRX_PATTERN_MINER_INTERVAL_DAYS', 'PRX_PATTERN_MINER_MIN_TICKETS', 'PRX_PATTERN_MINER_MAX_PROPOSALS',
-    'PRX_STALENESS_ENABLED', 'PRX_STALENESS_INTERVAL_DAYS',
-    'PRX_STALE_BRANCH_ENABLED', 'PRX_STALE_BRANCH_DAYS', 'PRX_STALE_BRANCH_INTERVAL_DAYS',
-    'PRX_DECISION_OUTCOME_ENABLED', 'PRX_DECISION_OUTCOME_INTERVAL_DAYS', 'PRX_DECISION_OUTCOME_LOOKBACK_DAYS', 'PRX_DECISION_OUTCOME_MIN_EVIDENCE',
+    'PRX_PATTERN_MINER_ENABLED', 'PRX_PATTERN_MINER_INTERVAL_DAYS', 'PRX_PATTERN_MINER_MIN_TICKETS', 'PRX_PATTERN_MINER_MAX_PROPOSALS', 'PRX_PATTERN_MINER_RUN_AT',
+    'PRX_STALENESS_ENABLED', 'PRX_STALENESS_INTERVAL_DAYS', 'PRX_STALENESS_RUN_AT',
+    'PRX_STALE_BRANCH_ENABLED', 'PRX_STALE_BRANCH_DAYS', 'PRX_STALE_BRANCH_INTERVAL_DAYS', 'PRX_STALE_BRANCH_RUN_AT',
+    'PRX_DECISION_OUTCOME_ENABLED', 'PRX_DECISION_OUTCOME_INTERVAL_DAYS', 'PRX_DECISION_OUTCOME_LOOKBACK_DAYS', 'PRX_DECISION_OUTCOME_MIN_EVIDENCE', 'PRX_DECISION_OUTCOME_RUN_AT',
     'PRX_COCHANGE_WINDOW_DAYS', 'PRX_COCHANGE_CACHE_TTL_DAYS',
     'PRX_CORTEX_ENABLED', 'PRX_CORTEX_DEBOUNCE_SECS', 'PRX_CORTEX_RESYNC_HOURS', 'PRX_CORTEX_DISTRIBUTED', 'PRX_CORTEX_FORCE_BUILDER',
     'PRX_CORTEX_AUTONOMY_LEVEL', 'PRX_CORTEX_AUTO_PROMOTE_THRESHOLD', 'PRX_CORTEX_AUTO_PROMOTE_DELAY_HOURS', 'PRX_CORTEX_AUTO_PROMOTE_MIN_AGE_DAYS',
